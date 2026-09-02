@@ -617,8 +617,11 @@ const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 const jsonbinConfigured = () => JSONBIN_BIN_ID !== "YOUR_JSONBIN_BIN_ID" && JSONBIN_API_KEY !== "YOUR_JSONBIN_API_KEY";
 
 async function fetchTeamsOnce(){
-  const res = await fetch(`${JSONBIN_URL}/latest`, {
-    headers: { "X-Master-Key": JSONBIN_API_KEY }
+  // cache:"no-store" + a cache-busting query param — force the browser to
+  // always hit the network fresh, never serve a stale cached GET response.
+  const res = await fetch(`${JSONBIN_URL}/latest?t=${Date.now()}`, {
+    headers: { "X-Master-Key": JSONBIN_API_KEY, "Cache-Control": "no-cache" },
+    cache: "no-store",
   });
   if(!res.ok) throw new Error("JSONBin fetch failed: " + res.status);
   const data = await res.json();
