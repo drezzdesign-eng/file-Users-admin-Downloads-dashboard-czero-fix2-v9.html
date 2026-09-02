@@ -625,27 +625,33 @@ async function fetchTeamsOnce(){
   return data.record.map(migrateTeam);
 }
 
+let everLoadedOk = false;
 async function loadTeams(){
   if(!jsonbinConfigured()){
     console.warn("JSONBin belum disetkan — data team TIDAK akan disimpan/sync. Sila isi JSONBIN_BIN_ID & JSONBIN_API_KEY dalam kod.");
-    if(!teams || teams.length === 0) teams = DEFAULT_TEAMS.map(migrateTeam);
+    if(!everLoadedOk) teams = DEFAULT_TEAMS.map(migrateTeam);
     lastLoadedAt = Date.now();
     render();
     return;
   }
   try{
     teams = await fetchTeamsOnce();
+    everLoadedOk = true;
   }catch(e1){
     // Retry once after a short pause — covers most transient network hiccups
     // before we consider the read a real failure.
     try{
       await new Promise(r=>setTimeout(r, 1200));
       teams = await fetchTeamsOnce();
+      everLoadedOk = true;
     }catch(e2){
       console.warn("loadTeams: could not reach JSONBin — showing local fallback only, NOT touching saved data", e2);
       // A read failure must NEVER be able to reset or overwrite the real
-      // shared data. If we already have something in memory, keep showing it.
-      if(!teams || teams.length === 0){
+      // shared data. Only fall back to defaults if we have NEVER successfully
+      // loaded before — a legitimately empty team list (admin deleted all of
+      // them on purpose) must NOT be treated the same as "never loaded" just
+      // because its length is also 0.
+      if(!everLoadedOk){
         teams = DEFAULT_TEAMS.map(migrateTeam); // local-only placeholder, never written back
       }
       lastLoadedAt = Date.now();
@@ -666,6 +672,7 @@ async function saveTeams(newTeams){
         headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
         body: JSON.stringify(teams),
       });
+      everLoadedOk = true; // a successful save is just as good as a successful load
     }catch(e){ console.error("saveTeams failed", e); }
   } else {
     console.warn("JSONBin belum disetkan — perubahan ini TIDAK disimpan kekal.");
