@@ -511,7 +511,6 @@ function migrateTeam(t){
   return t;
 }
 
-const STORE_KEY = "cz-ops-teams-v4-gmaps";
 let teams = [];
 let lastLoadedAt = 0;
 let gmap = null;
@@ -606,12 +605,34 @@ function focusTeam(id){
   openInfo(t, marker);
 }
 
+// ===================================================================
+// JSONBIN CONFIG — paste your JSONBin.io values here.
+// Bin ID: from the bin's page URL / dashboard.
+// API Key: from https://jsonbin.io/api-keys (the "X-Master-Key")
+// ===================================================================
+const JSONBIN_BIN_ID = "6a981a33f5f4af5e2960db0d";
+const JSONBIN_API_KEY = "$2a$10$NC4XmJZMzrWb00rfkk9Ec.6oiinQqsu2bmwOD04J8AjtpKL3LzTwq";
+// ===================================================================
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+const jsonbinConfigured = () => JSONBIN_BIN_ID !== "YOUR_JSONBIN_BIN_ID" && JSONBIN_API_KEY !== "YOUR_JSONBIN_API_KEY";
+
 async function fetchTeamsOnce(){
-  const res = await window.storage.get(STORE_KEY, true);
-  return JSON.parse(res.value).map(migrateTeam);
+  const res = await fetch(`${JSONBIN_URL}/latest`, {
+    headers: { "X-Master-Key": JSONBIN_API_KEY }
+  });
+  if(!res.ok) throw new Error("JSONBin fetch failed: " + res.status);
+  const data = await res.json();
+  return data.record.map(migrateTeam);
 }
 
 async function loadTeams(){
+  if(!jsonbinConfigured()){
+    console.warn("JSONBin belum disetkan — data team TIDAK akan disimpan/sync. Sila isi JSONBIN_BIN_ID & JSONBIN_API_KEY dalam kod.");
+    if(!teams || teams.length === 0) teams = DEFAULT_TEAMS.map(migrateTeam);
+    lastLoadedAt = Date.now();
+    render();
+    return;
+  }
   try{
     teams = await fetchTeamsOnce();
   }catch(e1){
@@ -621,12 +642,11 @@ async function loadTeams(){
       await new Promise(r=>setTimeout(r, 1200));
       teams = await fetchTeamsOnce();
     }catch(e2){
-      console.warn("loadTeams: could not reach shared storage — showing local fallback only, NOT touching saved data", e2);
+      console.warn("loadTeams: could not reach JSONBin — showing local fallback only, NOT touching saved data", e2);
       // A read failure must NEVER be able to reset or overwrite the real
-      // shared data. If we already have something in memory (from an earlier
-      // successful load), just keep showing that and skip this refresh.
+      // shared data. If we already have something in memory, keep showing it.
       if(!teams || teams.length === 0){
-        teams = DEFAULT_TEAMS.map(migrateTeam); // local-only placeholder, never written to storage
+        teams = DEFAULT_TEAMS.map(migrateTeam); // local-only placeholder, never written back
       }
       lastLoadedAt = Date.now();
       render();
@@ -639,7 +659,17 @@ async function loadTeams(){
 
 async function saveTeams(newTeams){
   teams = newTeams;
-  try{ await window.storage.set(STORE_KEY, JSON.stringify(teams), true); }catch(e){ console.error(e); }
+  if(jsonbinConfigured()){
+    try{
+      await fetch(JSONBIN_URL, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
+        body: JSON.stringify(teams),
+      });
+    }catch(e){ console.error("saveTeams failed", e); }
+  } else {
+    console.warn("JSONBin belum disetkan — perubahan ini TIDAK disimpan kekal.");
+  }
   lastLoadedAt = Date.now();
   render();
 }
