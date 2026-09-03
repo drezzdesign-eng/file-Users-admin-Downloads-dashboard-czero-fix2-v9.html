@@ -114,7 +114,10 @@
   .card .stage-label{ font-size:9.5px; font-weight:600; margin-top:1px; }
   .card .site{ color:var(--muted); font-size:10.5px; margin-top:5px; }
   .card .job{ font-size:10.5px; margin-top:4px; color:#465063; }
-  .card .ago{ font-size:9px; color:var(--muted); margin-top:5px; }
+  .stage-timer{ font-size:12px; font-weight:700; font-family:'Space Grotesk', sans-serif; letter-spacing:.3px; font-variant-numeric: tabular-nums; }
+  .card .stage-timer{ margin-top:6px; }
+  .info-status + .stage-timer{ margin-top:2px; margin-bottom:4px; }
+  .ci-current .stage-timer{ margin-left:6px; }
 
   .overlay{
     position:fixed; inset:0; background:rgba(6,10,18,.75); backdrop-filter:blur(3px);
@@ -584,9 +587,11 @@ function openInfo(team, marker){
   const hist = (team.history||[]).slice(-4).reverse().map(h=>`${stageShort(h.stage)} — ${fmtTime(h.at)}`).join("<br>");
   const crew = [team.leader, team.assistant].filter(Boolean).join(" / ");
   const vehicle = [team.vehiclePlate, team.vehicleModel].filter(Boolean).join(" — ");
+  const lastAt = team.history && team.history.length ? team.history[team.history.length-1].at : null;
   infoWindow.setContent(`
     <div class="info-name">${team.name}</div>
     <div class="info-status" style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</div>
+    ${lastAt ? `<div class="stage-timer" data-since="${lastAt}" style="color:${STAGES[team.stage].color}">⏱ ${formatStopwatch(Date.now()-lastAt)}</div>` : ""}
     <div class="info-site">${team.site||""}</div>
     <div class="info-job">${team.job||""}</div>
     ${crew ? `<div class="info-crew">👤 ${crew}</div>` : ""}
@@ -720,6 +725,25 @@ function agoText(ts){
   return `${Math.round(m/60)}h`;
 }
 
+// Live running-timer format: HH:MM:SS (counts up from the moment the current
+// checkpoint was pressed, so it shows exactly how long this process has taken).
+function formatStopwatch(ms){
+  const totalSec = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(totalSec/3600);
+  const m = Math.floor((totalSec%3600)/60);
+  const s = totalSec%60;
+  const pad = n => String(n).padStart(2,"0");
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function tickStageTimers(){
+  document.querySelectorAll(".stage-timer[data-since]").forEach(el=>{
+    const since = parseInt(el.dataset.since, 10);
+    el.textContent = "⏱ " + formatStopwatch(Date.now() - since);
+  });
+}
+setInterval(tickStageTimers, 1000);
+
 function renderCols(){
   const groups = {moving:[], working:[], trouble:[], done:[]};
   teams.forEach(t=> groups[BUCKET_OF_STAGE[t.stage]].push(t));
@@ -736,7 +760,7 @@ function renderCols(){
       </div>
       <div class="site">${t.site||""}</div>
       <div class="job">${t.job||""}</div>
-      ${lastAt ? `<div class="ago">${agoText(lastAt)}</div>` : ""}
+      ${lastAt ? `<div class="stage-timer" data-since="${lastAt}" style="color:${STAGES[t.stage].color}">⏱ ${formatStopwatch(Date.now()-lastAt)}</div>` : ""}
     </div>`;
   };
   const noTeamHtml = `<div class="small-muted">${tr("noTeam")}</div>`;
@@ -988,7 +1012,8 @@ async function unlockTeamForCheckin(){
 function renderCheckinStages(){
   const team = teams.find(t=>t.id===ciSelectedId);
   if(!team || ciUnlockedId !== team.id) return;
-  document.getElementById("ciCurrent").innerHTML = `${tr("ciCurrentPrefix")} <b style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</b>`;
+  document.getElementById("ciCurrent").innerHTML = `${tr("ciCurrentPrefix")} <b style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</b>` +
+    (team.history && team.history.length ? ` <span class="stage-timer" data-since="${team.history[team.history.length-1].at}" style="color:${STAGES[team.stage].color}">⏱ ${formatStopwatch(Date.now()-team.history[team.history.length-1].at)}</span>` : "");
   document.getElementById("ciStageList").innerHTML = STAGE_ORDER.map(k=>{
     const isCurrent = k === team.stage;
     return `
