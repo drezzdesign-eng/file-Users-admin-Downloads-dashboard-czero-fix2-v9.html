@@ -538,6 +538,7 @@ function migrateTeam(t){
   }
   if(!t.history) t.history = [];
   if(!t.pin) t.pin = "0000"; // default PIN when missing — change it in ⚙ Settings
+  t.pin = String(t.pin); // normalize — a PIN edited directly in JSONBin as a bare number (no quotes) must still match the always-string input from the PIN screen
   if(t.leader === undefined) t.leader = "";
   if(t.assistant === undefined) t.assistant = "";
   if(t.vehiclePlate === undefined) t.vehiclePlate = "";
@@ -875,7 +876,7 @@ function askPin(expectedPin, titleKey){
     pinOverlay.classList.add("open");
     setTimeout(()=>pinInput.focus(), 50);
     pinResolver = (submitted) => {
-      if(submitted === expectedPin && expectedPin){
+      if(String(submitted) === String(expectedPin) && expectedPin){
         pinOverlay.classList.remove("open");
         resolve(true);
       } else {
