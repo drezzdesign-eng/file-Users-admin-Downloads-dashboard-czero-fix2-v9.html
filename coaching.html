@@ -1097,8 +1097,11 @@ document.getElementById('importOpsBtn').addEventListener('click', async () => {
     teams.forEach(t => {
       (t.history||[]).forEach(h => {
         if(h.stage !== 'complete') return;
-        const leaderLc = (h.leader||'').toLowerCase();
-        const assistantLc = (h.assistant||'').toLowerCase();
+        // Older checkpoints (before the leader/assistant snapshot feature was
+        // added to Ops Monitor) won't have h.leader/h.assistant — fall back to
+        // the team's current leader/assistant for those older entries.
+        const leaderLc = (h.leader !== undefined ? h.leader : t.leader || '').toLowerCase();
+        const assistantLc = (h.assistant !== undefined ? h.assistant : t.assistant || '').toLowerCase();
         if(leaderLc === nameLc || assistantLc === nameLc){
           jobs.push({
             name: [h.site||t.site, h.job||t.job].filter(Boolean).join(' — '),
