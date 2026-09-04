@@ -291,6 +291,7 @@
     <h3 id="checkinTitle">Staff Check-in</h3>
     <div class="ci-team-select">
       <select id="ciTeamSelect"></select>
+      <button class="btn" id="ciContinueBtn" style="width:100%; margin-top:10px;"></button>
     </div>
     <div class="ci-current" id="ciCurrent"></div>
     <div id="ciStageList"></div>
@@ -372,6 +373,7 @@ const I18N = {
     checkinBtn: "✔ Check-in",
     checkinTitle: "Staff Check-in",
     ciCurrentPrefix: "Status semasa:",
+    ciContinue: "Teruskan →",
     ciGpsNote: "Tekan mana-mana checkpoint untuk kemaskini status. Lokasi GPS akan cuba dikemaskini sekali secara automatik (kalau dibenarkan).",
     pinCancel: "Batal",
     pinConfirm: "Sahkan",
@@ -445,6 +447,7 @@ const I18N = {
     checkinBtn: "✔ Check-in",
     checkinTitle: "Staff Check-in",
     ciCurrentPrefix: "Current status:",
+    ciContinue: "Continue →",
     ciGpsNote: "Tap any checkpoint to update status. GPS location will also try to auto-update once (if allowed).",
     pinCancel: "Cancel",
     pinConfirm: "Confirm",
@@ -538,6 +541,7 @@ function migrateTeam(t){
   }
   if(!t.history) t.history = [];
   if(!t.pin) t.pin = "0000"; // default PIN when missing — change it in ⚙ Settings
+  t.pin = String(t.pin); // normalize — a PIN edited directly in JSONBin as a bare number (no quotes) must still match the always-string input from the PIN screen
   if(t.leader === undefined) t.leader = "";
   if(t.assistant === undefined) t.assistant = "";
   if(t.vehiclePlate === undefined) t.vehiclePlate = "";
@@ -835,6 +839,7 @@ function applyStaticText(){
   document.getElementById("checkinTitle").textContent = tr("checkinTitle");
   document.getElementById("ciCloseBtn").textContent = tr("close");
   document.getElementById("ciGpsNote").textContent = tr("ciGpsNote");
+  document.getElementById("ciContinueBtn").textContent = tr("ciContinue");
   document.getElementById("pinCancelBtn").textContent = tr("pinCancel");
   document.getElementById("pinConfirmBtn").textContent = tr("pinConfirm");
   document.getElementById("langMsBtn").classList.toggle("active", LANG==="ms");
@@ -875,7 +880,7 @@ function askPin(expectedPin, titleKey){
     pinOverlay.classList.add("open");
     setTimeout(()=>pinInput.focus(), 50);
     pinResolver = (submitted) => {
-      if(submitted === expectedPin && expectedPin){
+      if(String(submitted) === String(expectedPin) && expectedPin){
         pinOverlay.classList.remove("open");
         resolve(true);
       } else {
@@ -1073,10 +1078,14 @@ function populateCiTeamSelect(){
   sel.innerHTML = teams.map(t=>`<option value="${t.id}">${t.name}</option>`).join("");
   ciSelectedId = teams.some(t=>t.id===prevVal) ? prevVal : (teams[0] && teams[0].id);
   sel.value = ciSelectedId;
-  sel.onchange = () => { ciSelectedId = sel.value; unlockTeamForCheckin(); };
+  sel.onchange = () => { ciSelectedId = sel.value; ciUnlockedId = null; document.getElementById("ciStageList").innerHTML = ""; document.getElementById("ciCurrent").innerHTML = ""; };
   checkinOverlay.classList.add("open");
-  unlockTeamForCheckin();
+  ciUnlockedId = null;
+  document.getElementById("ciStageList").innerHTML = "";
+  document.getElementById("ciCurrent").innerHTML = "";
+  document.getElementById("ciContinueBtn").textContent = tr("ciContinue");
 }
+document.getElementById("ciContinueBtn").onclick = () => unlockTeamForCheckin();
 
 async function unlockTeamForCheckin(){
   ciUnlockedId = null;
