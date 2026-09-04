@@ -260,6 +260,9 @@
     <div class="admin-tabs">
       <button class="admin-tab active" id="tabEditBtn">✎ <span id="tabEditLabel">Edit Team</span></button>
       <button class="admin-tab" id="tabRegistryBtn">📋 <span id="tabRegistryLabel">Senarai Team</span></button>
+      <button class="admin-tab" id="tabStaffBtn">👤 <span id="tabStaffLabel">Staff</span></button>
+      <button class="admin-tab" id="tabKpiBtn">📊 <span id="tabKpiLabel">KPI</span></button>
+      <a class="admin-tab" id="coachingLinkBtn" href="coaching.html" target="_blank" rel="noopener" style="text-decoration:none; margin-left:auto;">📝 <span id="coachingLinkLabel">Coaching KPI</span> ↗</a>
     </div>
 
     <div id="editView">
@@ -280,6 +283,26 @@
       <div id="registryTable"></div>
       <div class="modal-foot" style="justify-content:flex-end;">
         <button class="btn ghost" id="closeRegistryBtn">Tutup</button>
+      </div>
+    </div>
+
+    <div id="staffView" style="display:none;">
+      <h3 id="staffTitle">Daftar Staff</h3>
+      <div id="staffList"></div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="addStaffBtn">+ Tambah Staff</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn ghost" id="closeStaffBtn">Tutup</button>
+          <button class="btn" id="saveStaffBtn">Simpan</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="kpiView" style="display:none;">
+      <h3 id="kpiTitle">KPI Staff</h3>
+      <div id="kpiTable"></div>
+      <div class="modal-foot" style="justify-content:flex-end;">
+        <button class="btn ghost" id="closeKpiBtn">Tutup</button>
       </div>
     </div>
   </div>
@@ -386,6 +409,17 @@ const I18N = {
     printDuration: "Tempoh",
     printGenerated: "Dijana pada:",
     ongoing: "sedang berjalan",
+    tabStaff: "Staff",
+    tabKpi: "KPI",
+    coachingLink: "Coaching KPI",
+    staffTitle: "Daftar Staff",
+    addStaff: "+ Tambah Staff",
+    staffNamePh: "Nama Staff",
+    staffRolePh: "Jawatan/Peranan",
+    kpiTitle: "KPI Staff",
+    kpiJobs: "Job Selesai",
+    kpiTime: "Jumlah Masa",
+    kpiNote: "Dikira automatik daripada sejarah checkpoint setiap team (Ketua & Assistant). Data lama (sebelum ciri ini) guna nama Ketua/Assistant semasa sebagai anggaran.",
     tabEdit: "Edit Team",
     tabRegistry: "Senarai Team",
     registryTitle: "Senarai Team Berdaftar",
@@ -460,6 +494,17 @@ const I18N = {
     printDuration: "Duration",
     printGenerated: "Generated on:",
     ongoing: "ongoing",
+    tabStaff: "Staff",
+    tabKpi: "KPI",
+    coachingLink: "Coaching KPI",
+    staffTitle: "Staff Directory",
+    addStaff: "+ Add Staff",
+    staffNamePh: "Staff Name",
+    staffRolePh: "Role/Position",
+    kpiTitle: "Staff KPI",
+    kpiJobs: "Jobs Completed",
+    kpiTime: "Total Time",
+    kpiNote: "Automatically calculated from every team's checkpoint history (Leader & Assistant). Older data (before this feature) uses the team's current Leader/Assistant as an estimate.",
     tabEdit: "Edit Team",
     tabRegistry: "Team Registry",
     registryTitle: "Registered Team List",
@@ -551,6 +596,7 @@ function migrateTeam(t){
 }
 
 let teams = [];
+let staff = [];
 let lastLoadedAt = 0;
 let gmap = null;
 let infoWindow = null;
@@ -656,7 +702,7 @@ const JSONBIN_API_KEY = "$2a$10$NC4XmJZMzrWb00rfkk9Ec.6oiinQqsu2bmwOD04J8AjtpKL3
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 const jsonbinConfigured = () => JSONBIN_BIN_ID !== "YOUR_JSONBIN_BIN_ID" && JSONBIN_API_KEY !== "YOUR_JSONBIN_API_KEY";
 
-async function fetchTeamsOnce(){
+async function fetchDataOnce(){
   // cache:"no-store" + a cache-busting query param — force the browser to
   // always hit the network fresh, never serve a stale cached GET response.
   const res = await fetch(`${JSONBIN_URL}/latest?t=${Date.now()}`, {
@@ -665,27 +711,35 @@ async function fetchTeamsOnce(){
   });
   if(!res.ok) throw new Error("JSONBin fetch failed: " + res.status);
   const data = await res.json();
-  return data.record.map(migrateTeam);
+  const record = data.record;
+  // Backward-compatible: older data was saved as a plain array of teams.
+  // Newer data is {teams:[...], staff:[...]}.
+  if(Array.isArray(record)){
+    return { teams: record.map(migrateTeam), staff: [] };
+  }
+  return { teams: (record.teams||[]).map(migrateTeam), staff: record.staff||[] };
 }
 
 let everLoadedOk = false;
 async function loadTeams(){
   if(!jsonbinConfigured()){
     console.warn("JSONBin belum disetkan — data team TIDAK akan disimpan/sync. Sila isi JSONBIN_BIN_ID & JSONBIN_API_KEY dalam kod.");
-    if(!everLoadedOk) teams = DEFAULT_TEAMS.map(migrateTeam);
+    if(!everLoadedOk){ teams = DEFAULT_TEAMS.map(migrateTeam); staff = []; }
     lastLoadedAt = Date.now();
     render();
     return;
   }
   try{
-    teams = await fetchTeamsOnce();
+    const d = await fetchDataOnce();
+    teams = d.teams; staff = d.staff;
     everLoadedOk = true;
   }catch(e1){
     // Retry once after a short pause — covers most transient network hiccups
     // before we consider the read a real failure.
     try{
       await new Promise(r=>setTimeout(r, 1200));
-      teams = await fetchTeamsOnce();
+      const d = await fetchDataOnce();
+      teams = d.teams; staff = d.staff;
       everLoadedOk = true;
     }catch(e2){
       console.warn("loadTeams: could not reach JSONBin — showing local fallback only, NOT touching saved data", e2);
@@ -695,7 +749,7 @@ async function loadTeams(){
       // them on purpose) must NOT be treated the same as "never loaded" just
       // because its length is also 0.
       if(!everLoadedOk){
-        teams = DEFAULT_TEAMS.map(migrateTeam); // local-only placeholder, never written back
+        teams = DEFAULT_TEAMS.map(migrateTeam); staff = []; // local-only placeholder, never written back
       }
       lastLoadedAt = Date.now();
       render();
@@ -706,23 +760,24 @@ async function loadTeams(){
   render();
 }
 
-async function saveTeams(newTeams){
-  teams = newTeams;
+async function saveAll(){
   if(jsonbinConfigured()){
     try{
       await fetch(JSONBIN_URL, {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-        body: JSON.stringify(teams),
+        body: JSON.stringify({ teams, staff }),
       });
       everLoadedOk = true; // a successful save is just as good as a successful load
-    }catch(e){ console.error("saveTeams failed", e); }
+    }catch(e){ console.error("saveAll failed", e); }
   } else {
     console.warn("JSONBin belum disetkan — perubahan ini TIDAK disimpan kekal.");
   }
   lastLoadedAt = Date.now();
   render();
 }
+async function saveTeams(newTeams){ teams = newTeams; await saveAll(); }
+async function saveStaffList(newStaff){ staff = newStaff; await saveAll(); }
 
 function tickClock(){
   const now = new Date();
@@ -835,6 +890,15 @@ function applyStaticText(){
   document.getElementById("tabRegistryLabel").textContent = tr("tabRegistry");
   document.getElementById("registryTitle").textContent = tr("registryTitle");
   document.getElementById("closeRegistryBtn").textContent = tr("close");
+  document.getElementById("tabStaffLabel").textContent = tr("tabStaff");
+  document.getElementById("tabKpiLabel").textContent = tr("tabKpi");
+  document.getElementById("coachingLinkLabel").textContent = tr("coachingLink");
+  document.getElementById("staffTitle").textContent = tr("staffTitle");
+  document.getElementById("addStaffBtn").textContent = tr("addStaff");
+  document.getElementById("saveStaffBtn").textContent = tr("save");
+  document.getElementById("closeStaffBtn").textContent = tr("close");
+  document.getElementById("kpiTitle").textContent = tr("kpiTitle");
+  document.getElementById("closeKpiBtn").textContent = tr("close");
   document.getElementById("checkinBtnLabel").textContent = tr("checkinBtn");
   document.getElementById("checkinTitle").textContent = tr("checkinTitle");
   document.getElementById("ciCloseBtn").textContent = tr("close");
@@ -856,6 +920,8 @@ function setLang(l){
   render();
   if(overlay.classList.contains("open")) renderEditor();
   if(overlay.classList.contains("open") && document.getElementById("registryView").style.display !== "none") renderRegistryTable();
+  if(overlay.classList.contains("open") && document.getElementById("staffView").style.display !== "none") renderStaffEditor();
+  if(overlay.classList.contains("open") && document.getElementById("kpiView").style.display !== "none") renderKpiTable();
   if(checkinOverlay.classList.contains("open") && ciUnlockedId) renderCheckinStages();
 }
 
@@ -911,13 +977,22 @@ document.getElementById("closeRegistryBtn").onclick = () => overlay.classList.re
 
 document.getElementById("tabEditBtn").onclick = () => showAdminTab("edit");
 document.getElementById("tabRegistryBtn").onclick = () => showAdminTab("registry");
+document.getElementById("tabEditBtn").onclick = () => showAdminTab("edit");
+document.getElementById("tabRegistryBtn").onclick = () => showAdminTab("registry");
+document.getElementById("tabStaffBtn").onclick = () => showAdminTab("staff");
+document.getElementById("tabKpiBtn").onclick = () => showAdminTab("kpi");
 function showAdminTab(which){
-  const editOn = which === "edit";
-  document.getElementById("editView").style.display = editOn ? "" : "none";
-  document.getElementById("registryView").style.display = editOn ? "none" : "";
-  document.getElementById("tabEditBtn").classList.toggle("active", editOn);
-  document.getElementById("tabRegistryBtn").classList.toggle("active", !editOn);
-  if(!editOn) renderRegistryTable();
+  document.getElementById("editView").style.display = which==="edit" ? "" : "none";
+  document.getElementById("registryView").style.display = which==="registry" ? "" : "none";
+  document.getElementById("staffView").style.display = which==="staff" ? "" : "none";
+  document.getElementById("kpiView").style.display = which==="kpi" ? "" : "none";
+  document.getElementById("tabEditBtn").classList.toggle("active", which==="edit");
+  document.getElementById("tabRegistryBtn").classList.toggle("active", which==="registry");
+  document.getElementById("tabStaffBtn").classList.toggle("active", which==="staff");
+  document.getElementById("tabKpiBtn").classList.toggle("active", which==="kpi");
+  if(which==="registry") renderRegistryTable();
+  if(which==="staff") openStaffEditor();
+  if(which==="kpi") renderKpiTable();
 }
 
 function renderRegistryTable(){
@@ -960,6 +1035,84 @@ function renderRegistryTable(){
   document.querySelectorAll("[data-printid]").forEach(btn=>{
     btn.onclick = () => printTeamReport(btn.dataset.printid);
   });
+}
+
+// ===== Staff directory (name + role) =====
+let staffDraft = [];
+function openStaffEditor(){
+  staffDraft = JSON.parse(JSON.stringify(staff));
+  renderStaffEditor();
+}
+function renderStaffEditor(){
+  document.getElementById("staffList").innerHTML = staffDraft.map((s,i)=>`
+    <div class="team-edit-row">
+      <div class="top"><button class="btn ghost small" data-delstaff="${i}">${tr("delete")}</button></div>
+      <div class="fields">
+        <input data-si="${i}" data-sf="name" value="${s.name||""}" placeholder="${tr("staffNamePh")}">
+        <input data-si="${i}" data-sf="role" value="${s.role||""}" placeholder="${tr("staffRolePh")}">
+      </div>
+    </div>
+  `).join("") || `<p class="small-muted">${tr("noTeam")}</p>`;
+  document.getElementById("staffList").querySelectorAll("input").forEach(el=>{
+    el.onchange = () => { staffDraft[el.dataset.si][el.dataset.sf] = el.value; };
+  });
+  document.getElementById("staffList").querySelectorAll("[data-delstaff]").forEach(el=>{
+    el.onclick = () => { staffDraft.splice(+el.dataset.delstaff,1); renderStaffEditor(); };
+  });
+}
+document.getElementById("addStaffBtn").onclick = () => {
+  staffDraft.push({id:"s"+Date.now(), name:"", role:""});
+  renderStaffEditor();
+};
+document.getElementById("saveStaffBtn").onclick = async () => {
+  await saveStaffList(staffDraft);
+};
+document.getElementById("closeStaffBtn").onclick = () => overlay.classList.remove("open");
+document.getElementById("closeKpiBtn").onclick = () => overlay.classList.remove("open");
+
+// ===== KPI — aggregated from every team's checkpoint history =====
+function computeKPI(){
+  const map = {}; // name -> {jobs, ms}
+  const bump = (name) => { if(!map[name]) map[name] = {jobs:0, ms:0}; return map[name]; };
+  teams.forEach(t=>{
+    const hist = t.history || [];
+    for(let i=0;i<hist.length;i++){
+      const h = hist[i];
+      const next = hist[i+1];
+      // Older entries (before this feature) don't have a leader/assistant
+      // snapshot — fall back to the team's current leader/assistant for those.
+      const leader = h.leader !== undefined ? h.leader : t.leader;
+      const assistant = h.assistant !== undefined ? h.assistant : t.assistant;
+      const names = [leader, assistant].filter(Boolean);
+      if(next){
+        const durMs = next.at - h.at;
+        names.forEach(n => { bump(n).ms += durMs; });
+      }
+      if(h.stage === "returned"){
+        names.forEach(n => { bump(n).jobs += 1; });
+      }
+    }
+  });
+  return map;
+}
+function renderKpiTable(){
+  const kpi = computeKPI();
+  const roleOf = (name) => { const s = staff.find(x=>x.name===name); return s ? (s.role||"") : ""; };
+  const names = Object.keys(kpi).sort((a,b)=> kpi[b].jobs - kpi[a].jobs);
+  const rows = names.map(n=>`
+    <tr>
+      <td class="reg-name">${n}</td>
+      <td>${roleOf(n) || `<span class="reg-empty">—</span>`}</td>
+      <td>${kpi[n].jobs}</td>
+      <td>${formatStopwatch(kpi[n].ms)}</td>
+    </tr>
+  `).join("");
+  document.getElementById("kpiTable").innerHTML = `
+    <table class="reg-table">
+      <thead><tr><th>${tr("staffNamePh")}</th><th>${tr("staffRolePh")}</th><th>${tr("kpiJobs")}</th><th>${tr("kpiTime")}</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="reg-empty">${tr("noTeam")}</td></tr>`}</tbody>
+    </table>
+    <p class="small-muted">${tr("kpiNote")}</p>`;
 }
 
 // ===== Print / PDF report of a team's full checkpoint history =====
@@ -1127,7 +1280,7 @@ async function checkInStage(teamId, stage){
   const updated = JSON.parse(JSON.stringify(teams));
   updated[idx].stage = stage;
   if(!updated[idx].history) updated[idx].history = [];
-  updated[idx].history.push({ stage, at: Date.now() });
+  updated[idx].history.push({ stage, at: Date.now(), leader: updated[idx].leader||"", assistant: updated[idx].assistant||"", site: updated[idx].site||"", job: updated[idx].job||"" });
   if(updated[idx].history.length > 20) updated[idx].history = updated[idx].history.slice(-20);
 
   // Update local state + UI immediately (don't wait on GPS) so the tap feels instant
