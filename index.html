@@ -187,6 +187,20 @@
   .reg-table .reg-empty{ color:var(--muted); font-style:italic; }
   .reg-edit-btn{ background:transparent; border:1px solid var(--line); color:var(--muted); border-radius:6px; padding:4px 8px; font-size:10.5px; cursor:pointer; }
   .reg-stage-pill{ display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:20px; }
+  .stage-timer.frozen{ display:inline-block; }
+
+  /* Print / PDF report */
+  #printArea{ display:none; }
+  @media print{
+    body *{ visibility:hidden; }
+    #printArea, #printArea *{ visibility:visible; }
+    #printArea{ display:block; position:absolute; top:0; left:0; width:100%; padding:24px; color:#000; background:#fff; }
+    #printArea h1{ font-family:'Space Grotesk',sans-serif; font-size:18px; margin-bottom:14px; }
+    #printArea p{ font-size:12px; margin-bottom:6px; }
+    #printArea table{ width:100%; border-collapse:collapse; margin-top:14px; font-size:11px; }
+    #printArea th, #printArea td{ border:1px solid #999; padding:6px 8px; text-align:left; }
+    #printArea .print-footer{ margin-top:16px; font-size:10px; color:#555; }
+  }
 </style>
 </head>
 <body>
@@ -300,6 +314,8 @@
   </div>
 </div>
 
+<div id="printArea" class="print-only"></div>
+
 <script>
 // ===================================================================
 // PASTE YOUR GOOGLE MAPS API KEY BELOW (between the quotes)
@@ -362,6 +378,12 @@ const I18N = {
     pinAdminTitle: "Masukkan PIN Admin",
     pinStaffTitle: "Masukkan PIN Team",
     pinWrong: "PIN salah — cuba lagi.",
+    totalDuration: "Jumlah masa:",
+    printReport: "Laporan Sejarah Team",
+    printTimestamp: "Masa",
+    printDuration: "Tempoh",
+    printGenerated: "Dijana pada:",
+    ongoing: "sedang berjalan",
     tabEdit: "Edit Team",
     tabRegistry: "Senarai Team",
     registryTitle: "Senarai Team Berdaftar",
@@ -380,6 +402,7 @@ const I18N = {
       testing:     {label:"Testing & Commissioning", short:"Testing"},
       troubleshoot:{label:"Troubleshoot",       short:"Troubleshoot"},
       complete:    {label:"Job Selesai",        short:"Selesai"},
+      returned:    {label:"Check-In Balik di HQ", short:"Balik HQ"},
     },
   },
   en: {
@@ -428,6 +451,12 @@ const I18N = {
     pinAdminTitle: "Enter Admin PIN",
     pinStaffTitle: "Enter Team PIN",
     pinWrong: "Wrong PIN — try again.",
+    totalDuration: "Total time:",
+    printReport: "Team History Report",
+    printTimestamp: "Time",
+    printDuration: "Duration",
+    printGenerated: "Generated on:",
+    ongoing: "ongoing",
     tabEdit: "Edit Team",
     tabRegistry: "Team Registry",
     registryTitle: "Registered Team List",
@@ -446,6 +475,7 @@ const I18N = {
       testing:     {label:"Testing & Commissioning", short:"Testing"},
       troubleshoot:{label:"Troubleshooting",    short:"Trouble"},
       complete:    {label:"Job Complete",       short:"Done"},
+      returned:    {label:"Checked Back In at HQ", short:"At HQ"},
     },
   },
 };
@@ -454,7 +484,7 @@ function stageLabel(key){ return I18N[LANG].stage[key].label; }
 function stageShort(key){ return I18N[LANG].stage[key].short; }
 
 // ===== Stage pipeline: order staff check in through =====
-const STAGE_ORDER = ["transit","arrived","survey","installing","testing","troubleshoot","complete"];
+const STAGE_ORDER = ["transit","arrived","survey","installing","testing","troubleshoot","complete","returned"];
 const ICON_PATHS = {
   car:   '<path d="M4 16l1.2-4.8A2.4 2.4 0 0 1 7.5 9.4h9a2.4 2.4 0 0 1 2.3 1.8L20 16v4.2a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H7v1a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V16z" stroke="white" stroke-width="1.6" fill="none" stroke-linejoin="round"/><circle cx="7.5" cy="17.2" r="1.4" fill="white"/><circle cx="16.5" cy="17.2" r="1.4" fill="white"/>',
   pin:   '<path d="M12 21s7-7.5 7-12a7 7 0 1 0-14 0c0 4.5 7 12 7 12z" stroke="white" stroke-width="1.6" fill="none" stroke-linejoin="round"/><circle cx="12" cy="9" r="2.2" fill="white"/>',
@@ -463,6 +493,7 @@ const ICON_PATHS = {
   flask: '<path d="M9 3h6M10 3v5.5L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8.5V3" stroke="white" stroke-width="1.6" fill="none" stroke-linejoin="round"/><line x1="7.5" y1="14" x2="16.5" y2="14" stroke="white" stroke-width="1.4"/>',
   alert: '<path d="M12 3.5L2.5 20h19L12 3.5z" stroke="white" stroke-width="1.6" fill="none" stroke-linejoin="round"/><line x1="12" y1="10" x2="12" y2="14.5" stroke="white" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17.2" r="1" fill="white"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7" stroke="white" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  home:  '<path d="M4 11.5L12 4l8 7.5" stroke="white" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9" stroke="white" stroke-width="1.6" fill="none" stroke-linejoin="round"/><rect x="10" y="14" width="4" height="6" stroke="white" stroke-width="1.4" fill="none"/>',
 };
 const STAGES = {
   transit:      {color:"#ffb020", icon:"car"},
@@ -472,6 +503,7 @@ const STAGES = {
   testing:      {color:"#a855f7", icon:"flask"},
   troubleshoot: {color:"#ff5470", icon:"alert"},
   complete:     {color:"#00d9a3", icon:"check"},
+  returned:     {color:"#64748b", icon:"home"},
 };
 function iconSvgInline(stage, size){
   const s = STAGES[stage];
@@ -482,7 +514,7 @@ const BUCKET_OF_STAGE = {
   transit:"moving", arrived:"moving",
   survey:"working", installing:"working", testing:"working",
   troubleshoot:"trouble",
-  complete:"done",
+  complete:"done", returned:"done",
 };
 
 const DEFAULT_TEAMS = [
@@ -587,11 +619,10 @@ function openInfo(team, marker){
   const hist = (team.history||[]).slice(-4).reverse().map(h=>`${stageShort(h.stage)} — ${fmtTime(h.at)}`).join("<br>");
   const crew = [team.leader, team.assistant].filter(Boolean).join(" / ");
   const vehicle = [team.vehiclePlate, team.vehicleModel].filter(Boolean).join(" — ");
-  const lastAt = team.history && team.history.length ? team.history[team.history.length-1].at : null;
   infoWindow.setContent(`
     <div class="info-name">${team.name}</div>
     <div class="info-status" style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</div>
-    ${lastAt ? `<div class="stage-timer" data-since="${lastAt}" style="color:${STAGES[team.stage].color}">⏱ ${formatStopwatch(Date.now()-lastAt)}</div>` : ""}
+    ${stageTimerHtml(team)}
     <div class="info-site">${team.site||""}</div>
     <div class="info-job">${team.job||""}</div>
     ${crew ? `<div class="info-crew">👤 ${crew}</div>` : ""}
@@ -744,11 +775,24 @@ function tickStageTimers(){
 }
 setInterval(tickStageTimers, 1000);
 
+// Timer display for a team: a live ticking stopwatch while still in progress,
+// or a frozen total-duration summary once they've checked back in at HQ
+// (first checkpoint to last — the whole job's process time, no longer ticking).
+function stageTimerHtml(team){
+  if(!team.history || team.history.length === 0) return "";
+  const lastAt = team.history[team.history.length-1].at;
+  const color = STAGES[team.stage].color;
+  if(team.stage === "returned"){
+    const total = lastAt - team.history[0].at;
+    return `<div class="stage-timer frozen" style="color:${color}">✅ ${tr("totalDuration")} ${formatStopwatch(total)}</div>`;
+  }
+  return `<div class="stage-timer" data-since="${lastAt}" style="color:${color}">⏱ ${formatStopwatch(Date.now()-lastAt)}</div>`;
+}
+
 function renderCols(){
   const groups = {moving:[], working:[], trouble:[], done:[]};
   teams.forEach(t=> groups[BUCKET_OF_STAGE[t.stage]].push(t));
   const cardHtml = t => {
-    const lastAt = t.history && t.history.length ? t.history[t.history.length-1].at : null;
     return `
     <div class="card" style="border-left-color:${STAGES[t.stage].color}" data-id="${t.id}">
       <div class="card-top">
@@ -760,7 +804,7 @@ function renderCols(){
       </div>
       <div class="site">${t.site||""}</div>
       <div class="job">${t.job||""}</div>
-      ${lastAt ? `<div class="stage-timer" data-since="${lastAt}" style="color:${STAGES[t.stage].color}">⏱ ${formatStopwatch(Date.now()-lastAt)}</div>` : ""}
+      ${stageTimerHtml(t)}
     </div>`;
   };
   const noTeamHtml = `<div class="small-muted">${tr("noTeam")}</div>`;
@@ -881,7 +925,10 @@ function renderRegistryTable(){
       <td>${t.vehiclePlate || dash}${t.vehicleModel ? `<br><span class="reg-empty" style="font-style:normal;color:var(--muted)">${t.vehicleModel}</span>` : ""}</td>
       <td><span class="reg-stage-pill" style="background:${STAGES[t.stage].color}22; color:${STAGES[t.stage].color}">${stageLabel(t.stage)}</span></td>
       <td>${t.site || dash}${t.job ? `<br><span style="color:var(--muted)">${t.job}</span>` : ""}</td>
-      <td><button class="reg-edit-btn" data-editid="${t.id}">${tr("registryEdit")}</button></td>
+      <td style="white-space:nowrap;">
+        <button class="reg-edit-btn" data-editid="${t.id}">${tr("registryEdit")}</button>
+        <button class="reg-edit-btn" data-printid="${t.id}" title="${tr("printReport")}">🖨</button>
+      </td>
     </tr>
   `).join("");
   document.getElementById("registryTable").innerHTML = `
@@ -905,6 +952,43 @@ function renderRegistryTable(){
       }, 50);
     };
   });
+  document.querySelectorAll("[data-printid]").forEach(btn=>{
+    btn.onclick = () => printTeamReport(btn.dataset.printid);
+  });
+}
+
+// ===== Print / PDF report of a team's full checkpoint history =====
+function printTeamReport(teamId){
+  const team = teams.find(t=>t.id===teamId);
+  if(!team) return;
+  const hist = team.history || [];
+  const rows = hist.map((h,i)=>{
+    const next = hist[i+1];
+    const durMs = next ? (next.at - h.at) : (team.stage === "returned" ? 0 : Date.now() - h.at);
+    const durText = next ? formatStopwatch(durMs) : (team.stage === "returned" ? "—" : `${formatStopwatch(durMs)} (${tr("ongoing")})`);
+    return `<tr>
+      <td>${i+1}</td>
+      <td>${stageLabel(h.stage)}</td>
+      <td>${new Date(h.at).toLocaleString(tr("locale"))}</td>
+      <td>${durText}</td>
+    </tr>`;
+  }).join("");
+  const total = (hist.length >= 2 && team.stage === "returned") ? formatStopwatch(hist[hist.length-1].at - hist[0].at) : "—";
+  const crew = [team.leader, team.assistant].filter(Boolean).join(" / ") || "—";
+  const vehicle = [team.vehiclePlate, team.vehicleModel].filter(Boolean).join(" — ") || "—";
+
+  document.getElementById("printArea").innerHTML = `
+    <h1>C ZERO — ${tr("printReport")}</h1>
+    <p><b>${tr("regColTeam")}:</b> ${team.name} &nbsp; | &nbsp; <b>${tr("regColLeader")}:</b> ${crew}</p>
+    <p><b>${tr("regColVehicle")}:</b> ${vehicle} &nbsp; | &nbsp; <b>${tr("regColSite")}:</b> ${team.site||"—"} — ${team.job||""}</p>
+    <p><b>${tr("totalDuration")}</b> ${total}</p>
+    <table>
+      <thead><tr><th>#</th><th>Checkpoint</th><th>${tr("printTimestamp")}</th><th>${tr("printDuration")}</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">${tr("noTeam")}</td></tr>`}</tbody>
+    </table>
+    <p class="print-footer">${tr("printGenerated")} ${new Date().toLocaleString(tr("locale"))}</p>
+  `;
+  window.print();
 }
 
 let draft = [];
@@ -1012,8 +1096,7 @@ async function unlockTeamForCheckin(){
 function renderCheckinStages(){
   const team = teams.find(t=>t.id===ciSelectedId);
   if(!team || ciUnlockedId !== team.id) return;
-  document.getElementById("ciCurrent").innerHTML = `${tr("ciCurrentPrefix")} <b style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</b>` +
-    (team.history && team.history.length ? ` <span class="stage-timer" data-since="${team.history[team.history.length-1].at}" style="color:${STAGES[team.stage].color}">⏱ ${formatStopwatch(Date.now()-team.history[team.history.length-1].at)}</span>` : "");
+  document.getElementById("ciCurrent").innerHTML = `${tr("ciCurrentPrefix")} <b style="color:${STAGES[team.stage].color}">${stageLabel(team.stage)}</b>` + stageTimerHtml(team);
   document.getElementById("ciStageList").innerHTML = STAGE_ORDER.map(k=>{
     const isCurrent = k === team.stage;
     return `
@@ -1031,13 +1114,20 @@ function renderCheckinStages(){
 async function checkInStage(teamId, stage){
   const idx = teams.findIndex(t=>t.id===teamId);
   if(idx === -1) return;
+  if(teams[idx].stage === stage) return; // already on this checkpoint — ignore repeat taps, avoids duplicate history rows
   const updated = JSON.parse(JSON.stringify(teams));
   updated[idx].stage = stage;
   if(!updated[idx].history) updated[idx].history = [];
   updated[idx].history.push({ stage, at: Date.now() });
   if(updated[idx].history.length > 20) updated[idx].history = updated[idx].history.slice(-20);
 
-  // Best-effort silent GPS update — never blocks the check-in itself
+  // Update local state + UI immediately (don't wait on GPS) so the tap feels instant
+  // and staff never wonders "did that register?" and taps again.
+  teams = updated;
+  renderCheckinStages();
+  render();
+
+  // Best-effort silent GPS update, then persist to JSONBin
   if(navigator.geolocation){
     navigator.geolocation.getCurrentPosition(pos=>{
       updated[idx].lat = pos.coords.latitude;
@@ -1047,7 +1137,6 @@ async function checkInStage(teamId, stage){
   } else {
     await saveTeams(updated);
   }
-  renderCheckinStages();
 }
 
 applyStaticText();
