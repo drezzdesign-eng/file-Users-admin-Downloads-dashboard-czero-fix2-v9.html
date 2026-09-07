@@ -114,6 +114,8 @@
   .card .stage-label{ font-size:9.5px; font-weight:600; margin-top:1px; }
   .card .site{ color:var(--muted); font-size:10.5px; margin-top:5px; }
   .card .job{ font-size:10.5px; margin-top:4px; color:#465063; }
+  .card .card-crew{ font-size:10px; margin-top:5px; color:#465063; }
+  .card .card-vehicle{ font-size:10px; margin-top:2px; color:var(--muted); }
   .stage-timer{ font-size:12px; font-weight:700; font-family:'Space Grotesk', sans-serif; letter-spacing:.3px; font-variant-numeric: tabular-nums; }
   .card .stage-timer{ margin-top:6px; }
   .info-status + .stage-timer{ margin-top:2px; margin-bottom:4px; }
@@ -268,6 +270,9 @@
     <div id="editView">
       <h3 id="modalTitle">Kemaskini Status &amp; Lokasi Team</h3>
       <div id="editList"></div>
+      <datalist id="staffNamesList"></datalist>
+      <datalist id="vehiclePlateList"></datalist>
+      <datalist id="vehicleModelList"></datalist>
       <div class="modal-foot">
         <button class="btn ghost" id="addTeamBtn">+ Tambah Team</button>
         <div style="display:flex; gap:8px;">
@@ -852,6 +857,8 @@ function renderCols(){
   const groups = {moving:[], working:[], trouble:[], done:[]};
   teams.forEach(t=> groups[BUCKET_OF_STAGE[t.stage]].push(t));
   const cardHtml = t => {
+    const crew = [t.leader, t.assistant].filter(Boolean).join(" / ");
+    const vehicle = [t.vehiclePlate, t.vehicleModel].filter(Boolean).join(" — ");
     return `
     <div class="card" style="border-left-color:${STAGES[t.stage].color}" data-id="${t.id}">
       <div class="card-top">
@@ -863,6 +870,8 @@ function renderCols(){
       </div>
       <div class="site">${t.site||""}</div>
       <div class="job">${t.job||""}</div>
+      ${crew ? `<div class="card-crew">👤 ${crew}</div>` : ""}
+      ${vehicle ? `<div class="card-vehicle">🚐 ${vehicle}</div>` : ""}
       ${stageTimerHtml(t)}
     </div>`;
   };
@@ -1150,8 +1159,28 @@ function printTeamReport(teamId){
 }
 
 let draft = [];
+function buildDatalists(){
+  // Staff names: from the registered Staff directory, plus any leader/assistant
+  // already typed on any team (covers names not yet added to Staff directory).
+  const nameSet = new Set();
+  staff.forEach(s => { if(s.name) nameSet.add(s.name); });
+  teams.forEach(t => { if(t.leader) nameSet.add(t.leader); if(t.assistant) nameSet.add(t.assistant); });
+  document.getElementById("staffNamesList").innerHTML =
+    [...nameSet].sort().map(n=>`<option value="${n}">`).join("");
+
+  // Vehicle plate/model: every unique value already used across all teams,
+  // so re-assigning a known vehicle to a different team is just a pick, not retyping.
+  const plateSet = new Set(), modelSet = new Set();
+  teams.forEach(t => { if(t.vehiclePlate) plateSet.add(t.vehiclePlate); if(t.vehicleModel) modelSet.add(t.vehicleModel); });
+  document.getElementById("vehiclePlateList").innerHTML =
+    [...plateSet].sort().map(p=>`<option value="${p}">`).join("");
+  document.getElementById("vehicleModelList").innerHTML =
+    [...modelSet].sort().map(m=>`<option value="${m}">`).join("");
+}
+
 function openEditor(){
   draft = JSON.parse(JSON.stringify(teams));
+  buildDatalists();
   renderEditor();
 }
 function renderEditor(){
@@ -1165,12 +1194,12 @@ function renderEditor(){
       <input data-i="${i}" data-f="site" value="${t.site||""}" placeholder="${tr("sitePh")}" style="margin-top:6px;">
       <input data-i="${i}" data-f="job" value="${t.job||""}" placeholder="${tr("jobPh")}" style="margin-top:6px;">
       <div class="fields2" style="grid-template-columns:1fr 1fr; margin-top:6px;">
-        <input data-i="${i}" data-f="leader" value="${t.leader||""}" placeholder="${tr("leaderPh")}">
-        <input data-i="${i}" data-f="assistant" value="${t.assistant||""}" placeholder="${tr("assistantPh")}">
+        <input data-i="${i}" data-f="leader" value="${t.leader||""}" placeholder="${tr("leaderPh")}" list="staffNamesList">
+        <input data-i="${i}" data-f="assistant" value="${t.assistant||""}" placeholder="${tr("assistantPh")}" list="staffNamesList">
       </div>
       <div class="fields2" style="grid-template-columns:1fr 1fr; margin-top:6px;">
-        <input data-i="${i}" data-f="vehiclePlate" value="${t.vehiclePlate||""}" placeholder="${tr("vehiclePlatePh")}">
-        <input data-i="${i}" data-f="vehicleModel" value="${t.vehicleModel||""}" placeholder="${tr("vehicleModelPh")}">
+        <input data-i="${i}" data-f="vehiclePlate" value="${t.vehiclePlate||""}" placeholder="${tr("vehiclePlatePh")}" list="vehiclePlateList">
+        <input data-i="${i}" data-f="vehicleModel" value="${t.vehicleModel||""}" placeholder="${tr("vehicleModelPh")}" list="vehicleModelList">
       </div>
       <div class="fields2">
         <input data-i="${i}" data-f="lat" value="${t.lat ?? ""}" placeholder="${tr("latPh")}">
