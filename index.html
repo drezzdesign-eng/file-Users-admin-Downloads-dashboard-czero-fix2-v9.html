@@ -116,6 +116,7 @@
   .card .job{ font-size:10.5px; margin-top:4px; color:#465063; }
   .card .card-crew{ font-size:10px; margin-top:5px; color:#465063; }
   .card .card-vehicle{ font-size:10px; margin-top:2px; color:var(--muted); }
+  .card .card-eta{ font-size:9.5px; margin-top:5px; color:#8a6d1f; background:#fff8e6; border-radius:5px; padding:4px 6px; line-height:1.5; }
   .stage-timer{ font-size:12px; font-weight:700; font-family:'Space Grotesk', sans-serif; letter-spacing:.3px; font-variant-numeric: tabular-nums; }
   .card .stage-timer{ margin-top:6px; }
   .info-status + .stage-timer{ margin-top:2px; margin-bottom:4px; }
@@ -270,6 +271,7 @@
     <div id="editView">
       <h3 id="modalTitle">Kemaskini Status &amp; Lokasi Team</h3>
       <div id="editList"></div>
+      <datalist id="jobList"></datalist>
       <datalist id="staffNamesList"></datalist>
       <datalist id="vehiclePlateList"></datalist>
       <datalist id="vehicleModelList"></datalist>
@@ -388,6 +390,12 @@ const I18N = {
     assistantPh: "Nama Assistant",
     vehiclePlatePh: "No. Pendaftaran Kenderaan",
     vehicleModelPh: "Model/Jenis Kenderaan",
+    etaArrivalPh: "Anggaran Tiba di Lokasi",
+    etaCompletePh: "Anggaran Siap Kerja",
+    etaReturnPh: "Anggaran Balik ke HQ",
+    etaArrivalShort: "🕐 Tiba:",
+    etaCompleteShort: "🏁 Siap:",
+    etaReturnShort: "🔙 Balik HQ:",
     gps: "📍 Guna GPS Semasa",
     gpsSearching: "Mencari lokasi...",
     gpsUnsupported: "GPS tidak disokong",
@@ -473,6 +481,12 @@ const I18N = {
     assistantPh: "Assistant Name",
     vehiclePlatePh: "Vehicle Plate Number",
     vehicleModelPh: "Vehicle Model/Type",
+    etaArrivalPh: "Estimated Arrival at Site",
+    etaCompletePh: "Estimated Job Completion",
+    etaReturnPh: "Estimated Return to HQ",
+    etaArrivalShort: "🕐 ETA:",
+    etaCompleteShort: "🏁 Done by:",
+    etaReturnShort: "🔙 Return:",
     gps: "📍 Use Current GPS",
     gpsSearching: "Locating...",
     gpsUnsupported: "GPS not supported",
@@ -596,6 +610,9 @@ function migrateTeam(t){
   if(t.assistant === undefined) t.assistant = "";
   if(t.vehiclePlate === undefined) t.vehiclePlate = "";
   if(t.vehicleModel === undefined) t.vehicleModel = "";
+  if(t.etaArrival === undefined) t.etaArrival = "";
+  if(t.etaComplete === undefined) t.etaComplete = "";
+  if(t.etaReturn === undefined) t.etaReturn = "";
   delete t.status;
   return t;
 }
@@ -842,6 +859,13 @@ setInterval(tickStageTimers, 1000);
 // Timer display for a team: a live ticking stopwatch while still in progress,
 // or a frozen total-duration summary once they've checked back in at HQ
 // (first checkpoint to last — the whole job's process time, no longer ticking).
+function fmtEta(isoLocal){
+  if(!isoLocal) return "";
+  const d = new Date(isoLocal);
+  if(isNaN(d.getTime())) return "";
+  return d.toLocaleString(tr("locale"), {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+}
+
 function stageTimerHtml(team){
   if(!team.history || team.history.length === 0) return "";
   const lastAt = team.history[team.history.length-1].at;
@@ -859,6 +883,11 @@ function renderCols(){
   const cardHtml = t => {
     const crew = [t.leader, t.assistant].filter(Boolean).join(" / ");
     const vehicle = [t.vehiclePlate, t.vehicleModel].filter(Boolean).join(" — ");
+    const etas = [
+      t.etaArrival ? `${tr("etaArrivalShort")} ${fmtEta(t.etaArrival)}` : "",
+      t.etaComplete ? `${tr("etaCompleteShort")} ${fmtEta(t.etaComplete)}` : "",
+      t.etaReturn ? `${tr("etaReturnShort")} ${fmtEta(t.etaReturn)}` : "",
+    ].filter(Boolean);
     return `
     <div class="card" style="border-left-color:${STAGES[t.stage].color}" data-id="${t.id}">
       <div class="card-top">
@@ -872,6 +901,7 @@ function renderCols(){
       <div class="job">${t.job||""}</div>
       ${crew ? `<div class="card-crew">👤 ${crew}</div>` : ""}
       ${vehicle ? `<div class="card-vehicle">🚐 ${vehicle}</div>` : ""}
+      ${etas.length ? `<div class="card-eta">${etas.map(e=>`<div>${e}</div>`).join("")}</div>` : ""}
       ${stageTimerHtml(t)}
     </div>`;
   };
@@ -1160,6 +1190,13 @@ function printTeamReport(teamId){
 
 let draft = [];
 function buildDatalists(){
+  // Job type: "Internal Work" is always offered, plus every job description
+  // already used across teams (so re-picking a common job is one click).
+  const jobSet = new Set(["Internal Work"]);
+  teams.forEach(t => { if(t.job) jobSet.add(t.job); });
+  document.getElementById("jobList").innerHTML =
+    [...jobSet].sort().map(j=>`<option value="${j}">`).join("");
+
   // Staff names: from the registered Staff directory, plus any leader/assistant
   // already typed on any team (covers names not yet added to Staff directory).
   const nameSet = new Set();
@@ -1192,7 +1229,7 @@ function renderEditor(){
         <select data-i="${i}" data-f="stage">${STAGE_ORDER.map(k=>`<option value="${k}" ${k===t.stage?"selected":""}>${stageLabel(k)}</option>`).join("")}</select>
       </div>
       <input data-i="${i}" data-f="site" value="${t.site||""}" placeholder="${tr("sitePh")}" style="margin-top:6px;">
-      <input data-i="${i}" data-f="job" value="${t.job||""}" placeholder="${tr("jobPh")}" style="margin-top:6px;">
+      <input data-i="${i}" data-f="job" value="${t.job||""}" placeholder="${tr("jobPh")}" style="margin-top:6px;" list="jobList">
       <div class="fields2" style="grid-template-columns:1fr 1fr; margin-top:6px;">
         <input data-i="${i}" data-f="leader" value="${t.leader||""}" placeholder="${tr("leaderPh")}" list="staffNamesList">
         <input data-i="${i}" data-f="assistant" value="${t.assistant||""}" placeholder="${tr("assistantPh")}" list="staffNamesList">
@@ -1201,12 +1238,20 @@ function renderEditor(){
         <input data-i="${i}" data-f="vehiclePlate" value="${t.vehiclePlate||""}" placeholder="${tr("vehiclePlatePh")}" list="vehiclePlateList">
         <input data-i="${i}" data-f="vehicleModel" value="${t.vehicleModel||""}" placeholder="${tr("vehicleModelPh")}" list="vehicleModelList">
       </div>
-      <div class="fields2">
+      <div class="fields2" style="grid-template-columns:1fr 1fr; margin-top:6px;">
         <input data-i="${i}" data-f="lat" value="${t.lat ?? ""}" placeholder="${tr("latPh")}">
         <input data-i="${i}" data-f="lng" value="${t.lng ?? ""}" placeholder="${tr("lngPh")}">
         <button class="btn ghost small" data-gps="${i}">${tr("gps")}</button>
       </div>
-      <input data-i="${i}" data-f="pin" value="${t.pin||""}" placeholder="${tr("pinPh")}" style="margin-top:6px;">
+      <div style="margin-top:10px; padding-top:10px; border-top:1px dashed var(--line);">
+        <label style="font-size:9.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px;">${tr("etaArrivalPh")}</label>
+        <input type="datetime-local" data-i="${i}" data-f="etaArrival" value="${t.etaArrival||""}" style="margin-top:4px;">
+        <label style="font-size:9.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-top:8px; display:block;">${tr("etaCompletePh")}</label>
+        <input type="datetime-local" data-i="${i}" data-f="etaComplete" value="${t.etaComplete||""}" style="margin-top:4px;">
+        <label style="font-size:9.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; margin-top:8px; display:block;">${tr("etaReturnPh")}</label>
+        <input type="datetime-local" data-i="${i}" data-f="etaReturn" value="${t.etaReturn||""}" style="margin-top:4px;">
+      </div>
+      <input data-i="${i}" data-f="pin" value="${t.pin||""}" placeholder="${tr("pinPh")}" style="margin-top:10px;">
     </div>
   `).join("");
   document.getElementById("editList").querySelectorAll("input,select").forEach(el=>{
@@ -1236,7 +1281,7 @@ function renderEditor(){
   });
 }
 document.getElementById("addTeamBtn").onclick = () => {
-  draft.push({id:"t"+Date.now(), name:tr("newTeamName"), lat:3.14, lng:101.68, site:"", job:"", stage:"transit", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"0000"});
+  draft.push({id:"t"+Date.now(), name:tr("newTeamName"), lat:3.14, lng:101.68, site:"", job:"", stage:"transit", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", etaArrival:"", etaComplete:"", etaReturn:"", pin:"0000"});
   renderEditor();
 };
 document.getElementById("saveBtn").onclick = async () => {
