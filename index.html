@@ -432,7 +432,7 @@ const I18N = {
     kpiTitle: "KPI Staff",
     kpiJobs: "Job Selesai",
     kpiTime: "Jumlah Masa",
-    kpiNote: "Dikira automatik daripada sejarah checkpoint setiap team (Ketua & Assistant). Data lama (sebelum ciri ini) guna nama Ketua/Assistant semasa sebagai anggaran.",
+    kpiNote: "Rekod kekal — dikemaskini automatik setiap kali team check-in checkpoint (Ketua & Assistant). Data KPI ini TIDAK hilang walaupun job/tapak team ditukar atau dipadam untuk job hari berikutnya.",
     tabEdit: "Edit Team",
     tabRegistry: "Senarai Team",
     registryTitle: "Senarai Team Berdaftar",
@@ -523,7 +523,7 @@ const I18N = {
     kpiTitle: "Staff KPI",
     kpiJobs: "Jobs Completed",
     kpiTime: "Total Time",
-    kpiNote: "Automatically calculated from every team's checkpoint history (Leader & Assistant). Older data (before this feature) uses the team's current Leader/Assistant as an estimate.",
+    kpiNote: "Permanent record — updated automatically on every team check-in (Leader & Assistant). This KPI data is NOT lost even when a team's job/site is changed or cleared for the next day's job.",
     tabEdit: "Edit Team",
     tabRegistry: "Team Registry",
     registryTitle: "Registered Team List",
@@ -619,6 +619,11 @@ function migrateTeam(t){
 
 let teams = [];
 let staff = [];
+// Permanent KPI ledger — {name: {jobs, ms}}. Updated incrementally on every
+// checkpoint, saved to JSONBin alongside teams/staff, and NEVER derived live
+// from team.history. This means it survives admin deleting/resetting a
+// team's job for the next day, and isn't capped by team.history's 20-entry limit.
+let kpiTotals = {};
 let lastLoadedAt = 0;
 let gmap = null;
 let infoWindow = null;
@@ -735,11 +740,44 @@ async function fetchDataOnce(){
   const data = await res.json();
   const record = data.record;
   // Backward-compatible: older data was saved as a plain array of teams.
-  // Newer data is {teams:[...], staff:[...]}.
+  // Newer data is {teams:[...], staff:[...], kpiTotals:{...}}.
   if(Array.isArray(record)){
-    return { teams: record.map(migrateTeam), staff: [] };
+    return { teams: record.map(migrateTeam), staff: [], kpiTotals: {}, kpiNeedsBackfill: true };
   }
-  return { teams: (record.teams||[]).map(migrateTeam), staff: record.staff||[] };
+  return {
+    teams: (record.teams||[]).map(migrateTeam),
+    staff: record.staff||[],
+    kpiTotals: record.kpiTotals || {},
+    // kpiTotals never existed before this feature — the very first load after
+    // upgrading needs a one-time backfill from whatever history still exists.
+    kpiNeedsBackfill: record.kpiTotals === undefined,
+  };
+}
+
+// One-time migration: recompute totals the OLD way (aggregating whatever is
+// still sitting in team.history) so KPI collected before this fix isn't lost.
+// Only runs once — after the first save, kpiTotals exists and this is skipped.
+function backfillKpiFromHistory(teamsArr){
+  const map = {};
+  const bump = (name) => { if(!map[name]) map[name] = {jobs:0, ms:0}; return map[name]; };
+  teamsArr.forEach(t=>{
+    const hist = t.history || [];
+    for(let i=0;i<hist.length;i++){
+      const h = hist[i];
+      const next = hist[i+1];
+      const leader = h.leader !== undefined ? h.leader : t.leader;
+      const assistant = h.assistant !== undefined ? h.assistant : t.assistant;
+      const names = [leader, assistant].filter(Boolean);
+      if(next){
+        const durMs = next.at - h.at;
+        names.forEach(n => { bump(n).ms += durMs; });
+      }
+      if(h.stage === "returned"){
+        names.forEach(n => { bump(n).jobs += 1; });
+      }
+    }
+  });
+  return map;
 }
 
 let everLoadedOk = false;
@@ -753,7 +791,8 @@ async function loadTeams(){
   }
   try{
     const d = await fetchDataOnce();
-    teams = d.teams; staff = d.staff;
+    teams = d.teams; staff = d.staff; kpiTotals = d.kpiTotals;
+    if(d.kpiNeedsBackfill){ kpiTotals = backfillKpiFromHistory(teams); saveAll(); }
     everLoadedOk = true;
   }catch(e1){
     // Retry once after a short pause — covers most transient network hiccups
@@ -761,7 +800,8 @@ async function loadTeams(){
     try{
       await new Promise(r=>setTimeout(r, 1200));
       const d = await fetchDataOnce();
-      teams = d.teams; staff = d.staff;
+      teams = d.teams; staff = d.staff; kpiTotals = d.kpiTotals;
+      if(d.kpiNeedsBackfill){ kpiTotals = backfillKpiFromHistory(teams); saveAll(); }
       everLoadedOk = true;
     }catch(e2){
       console.warn("loadTeams: could not reach JSONBin — showing local fallback only, NOT touching saved data", e2);
@@ -788,7 +828,7 @@ async function saveAll(){
       await fetch(JSONBIN_URL, {
         method: "PUT",
         headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-        body: JSON.stringify({ teams, staff }),
+        body: JSON.stringify({ teams, staff, kpiTotals }),
       });
       everLoadedOk = true; // a successful save is just as good as a successful load
     }catch(e){ console.error("saveAll failed", e); }
@@ -1109,33 +1149,9 @@ document.getElementById("saveStaffBtn").onclick = async () => {
 document.getElementById("closeStaffBtn").onclick = () => overlay.classList.remove("open");
 document.getElementById("closeKpiBtn").onclick = () => overlay.classList.remove("open");
 
-// ===== KPI — aggregated from every team's checkpoint history =====
-function computeKPI(){
-  const map = {}; // name -> {jobs, ms}
-  const bump = (name) => { if(!map[name]) map[name] = {jobs:0, ms:0}; return map[name]; };
-  teams.forEach(t=>{
-    const hist = t.history || [];
-    for(let i=0;i<hist.length;i++){
-      const h = hist[i];
-      const next = hist[i+1];
-      // Older entries (before this feature) don't have a leader/assistant
-      // snapshot — fall back to the team's current leader/assistant for those.
-      const leader = h.leader !== undefined ? h.leader : t.leader;
-      const assistant = h.assistant !== undefined ? h.assistant : t.assistant;
-      const names = [leader, assistant].filter(Boolean);
-      if(next){
-        const durMs = next.at - h.at;
-        names.forEach(n => { bump(n).ms += durMs; });
-      }
-      if(h.stage === "returned"){
-        names.forEach(n => { bump(n).jobs += 1; });
-      }
-    }
-  });
-  return map;
-}
+// ===== KPI — read from the permanent kpiTotals ledger (see checkInStage) =====
 function renderKpiTable(){
-  const kpi = computeKPI();
+  const kpi = kpiTotals;
   const roleOf = (name) => { const s = staff.find(x=>x.name===name); return s ? (s.role||"") : ""; };
   const names = Object.keys(kpi).sort((a,b)=> kpi[b].jobs - kpi[a].jobs);
   const rows = names.map(n=>`
@@ -1192,7 +1208,7 @@ let draft = [];
 function buildDatalists(){
   // Job type: "Internal Work" is always offered, plus every job description
   // already used across teams (so re-picking a common job is one click).
-  const jobSet = new Set(["Internal Work"]);
+  const jobSet = new Set(["Job In House"]);
   teams.forEach(t => { if(t.job) jobSet.add(t.job); });
   document.getElementById("jobList").innerHTML =
     [...jobSet].sort().map(j=>`<option value="${j}">`).join("");
@@ -1352,9 +1368,28 @@ async function checkInStage(teamId, stage){
   if(idx === -1) return;
   if(teams[idx].stage === stage) return; // already on this checkpoint — ignore repeat taps, avoids duplicate history rows
   const updated = JSON.parse(JSON.stringify(teams));
-  updated[idx].stage = stage;
+  const now = Date.now();
   if(!updated[idx].history) updated[idx].history = [];
-  updated[idx].history.push({ stage, at: Date.now(), leader: updated[idx].leader||"", assistant: updated[idx].assistant||"", site: updated[idx].site||"", job: updated[idx].job||"" });
+  const prevEntry = updated[idx].history.length ? updated[idx].history[updated[idx].history.length-1] : null;
+
+  // Bump the PERMANENT KPI ledger for the segment that just closed (previous
+  // checkpoint -> now). This happens before team.history is touched below, so
+  // it survives even if admin later deletes/edits this team's job or the
+  // 20-entry history cap rolls this checkpoint off.
+  if(prevEntry){
+    const leader = prevEntry.leader !== undefined ? prevEntry.leader : updated[idx].leader;
+    const assistant = prevEntry.assistant !== undefined ? prevEntry.assistant : updated[idx].assistant;
+    const names = [leader, assistant].filter(Boolean);
+    const durMs = now - prevEntry.at;
+    names.forEach(n=>{
+      if(!kpiTotals[n]) kpiTotals[n] = {jobs:0, ms:0};
+      kpiTotals[n].ms += durMs;
+      if(stage === "returned") kpiTotals[n].jobs += 1;
+    });
+  }
+
+  updated[idx].stage = stage;
+  updated[idx].history.push({ stage, at: now, leader: updated[idx].leader||"", assistant: updated[idx].assistant||"", site: updated[idx].site||"", job: updated[idx].job||"" });
   if(updated[idx].history.length > 20) updated[idx].history = updated[idx].history.slice(-20);
 
   // Update local state + UI immediately (don't wait on GPS) so the tap feels instant
