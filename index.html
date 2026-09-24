@@ -355,9 +355,8 @@ const GOOGLE_MAPS_API_KEY = "AIzaSyBQ9G4dcISO1DBuCtViceRB-0apMIgK6FY";
 // ===================================================================
 
 // ===================================================================
-// PIN admin (untuk buka mod ⚙ Settings) — tukar nombor ni ikut suka
-// ===================================================================
-const ADMIN_PIN = "1234";
+// PIN admin (untuk buka mod ⚙ Settings) kini disimpan di backend
+// (Auth__OpsAdminPin dalam fail .env server) — bukan lagi dalam kod ini.
 // ===================================================================
 
 // ===== Language =====
@@ -416,6 +415,8 @@ const I18N = {
     pinAdminTitle: "Masukkan PIN Admin",
     pinStaffTitle: "Masukkan PIN Team",
     pinWrong: "PIN salah — cuba lagi.",
+    serverError: "Tidak dapat hubungi server — cuba lagi.",
+    sessionExpired: "Sesi admin tamat — sila buka ⚙ dan masukkan PIN semula.",
     totalDuration: "Jumlah masa:",
     printReport: "Laporan Sejarah Team",
     printTimestamp: "Masa",
@@ -507,6 +508,8 @@ const I18N = {
     pinAdminTitle: "Enter Admin PIN",
     pinStaffTitle: "Enter Team PIN",
     pinWrong: "Wrong PIN — try again.",
+    serverError: "Could not reach the server — try again.",
+    sessionExpired: "Admin session expired — open ⚙ and enter the PIN again.",
     totalDuration: "Total time:",
     printReport: "Team History Report",
     printTimestamp: "Time",
@@ -584,19 +587,6 @@ const BUCKET_OF_STAGE = {
   complete:"done", returned:"done",
 };
 
-const DEFAULT_TEAMS = [
-  {id:"t1", name:"Team 1", lat:6.1214, lng:100.3679, site:"Alor Setar - Kedai Runcit XYZ", job:"Pasang DC 60kW", stage:"transit", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1001"},
-  {id:"t2", name:"Team 2", lat:5.2945, lng:100.2685, site:"Bayan Lepas, P. Pinang", job:"Pasang AC 22kW x2", stage:"installing", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1002"},
-  {id:"t3", name:"Team 3", lat:4.5975, lng:101.0901, site:"Ipoh, Perak", job:"Site survey", stage:"survey", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1003"},
-  {id:"t4", name:"Team 4", lat:3.0738, lng:101.5183, site:"Shah Alam - Pusat Beli-belah", job:"Pasang DC 120kW", stage:"installing", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1004"},
-  {id:"t5", name:"Team 5", lat:3.1341, lng:101.6866, site:"KL Sentral - Parking Tower", job:"Commissioning", stage:"troubleshoot", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1005"},
-  {id:"t6", name:"Team 6", lat:2.7297, lng:101.9381, site:"Seremban, N. Sembilan", job:"Pasang AC 22kW", stage:"complete", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1006"},
-  {id:"t7", name:"Team 7", lat:2.2815, lng:102.2500, site:"Ayer Keroh, Melaka", job:"Pasang DC 60kW", stage:"transit", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1007"},
-  {id:"t8", name:"Team 8", lat:1.4200, lng:103.6300, site:"Iskandar Puteri, Johor", job:"Pasang AC 22kW x3", stage:"testing", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1008"},
-  {id:"t9", name:"Team 9", lat:3.8168, lng:103.3260, site:"Kuantan - Stesen Petronas", job:"Selenggara", stage:"complete", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1009"},
-  {id:"t10",name:"Team 10",lat:5.3296, lng:103.1370, site:"Kuala Terengganu, Mall", job:"Pasang DC 60kW", stage:"arrived", history:[], leader:"", assistant:"", vehiclePlate:"", vehicleModel:"", pin:"1010"},
-];
-
 // Migrate any old 4-value "status" field (from an earlier version of this dashboard) to the new "stage" pipeline
 function migrateTeam(t){
   if(!t.stage){
@@ -604,8 +594,8 @@ function migrateTeam(t){
     t.stage = map[t.status] || "transit";
   }
   if(!t.history) t.history = [];
-  if(!t.pin) t.pin = "0000"; // default PIN when missing — change it in ⚙ Settings
-  t.pin = String(t.pin); // normalize — a PIN edited directly in JSONBin as a bare number (no quotes) must still match the always-string input from the PIN screen
+  // PINs only come from the admin endpoint; the public board never includes them.
+  if(t.pin !== undefined) t.pin = String(t.pin);
   if(t.leader === undefined) t.leader = "";
   if(t.assistant === undefined) t.assistant = "";
   if(t.vehiclePlate === undefined) t.vehiclePlate = "";
@@ -619,10 +609,10 @@ function migrateTeam(t){
 
 let teams = [];
 let staff = [];
-// Permanent KPI ledger — {name: {jobs, ms}}. Updated incrementally on every
-// checkpoint, saved to JSONBin alongside teams/staff, and NEVER derived live
-// from team.history. This means it survives admin deleting/resetting a
-// team's job for the next day, and isn't capped by team.history's 20-entry limit.
+// Permanent KPI ledger — {name: {jobs, ms}}. Counted by the backend on every
+// checkpoint and NEVER derived live from team.history. This means it survives
+// admin deleting/resetting a team's job for the next day. Loaded for the admin
+// tabs only (see loadAdminData).
 let kpiTotals = {};
 let lastLoadedAt = 0;
 let gmap = null;
@@ -719,127 +709,94 @@ function focusTeam(id){
 }
 
 // ===================================================================
-// JSONBIN CONFIG — paste your JSONBin.io values here.
-// Bin ID: from the bin's page URL / dashboard.
-// API Key: from https://jsonbin.io/api-keys (the "X-Master-Key")
+// BACKEND API — semua data kini disimpan di backend C ZERO (PostgreSQL).
+// "/api" berfungsi di laman live (nginx hantar ke backend).
+// Untuk test fail ni secara local terhadap backend live, guna URL penuh,
+// contoh: "https://fleet-managing.czeros.tech/api"
 // ===================================================================
-const JSONBIN_BIN_ID = "6a981a33f5f4af5e2960db0d";
-const JSONBIN_API_KEY = "$2a$10$NC4XmJZMzrWb00rfkk9Ec.6oiinQqsu2bmwOD04J8AjtpKL3LzTwq";
+const API_BASE = "/api";
 // ===================================================================
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
-const jsonbinConfigured = () => JSONBIN_BIN_ID !== "YOUR_JSONBIN_BIN_ID" && JSONBIN_API_KEY !== "YOUR_JSONBIN_API_KEY";
 
-async function fetchDataOnce(){
-  // cache:"no-store" + a cache-busting query param — force the browser to
-  // always hit the network fresh, never serve a stale cached GET response.
-  const res = await fetch(`${JSONBIN_URL}/latest?t=${Date.now()}`, {
-    headers: { "X-Master-Key": JSONBIN_API_KEY, "Cache-Control": "no-cache" },
-    cache: "no-store",
+// Admin token from the ⚙ Settings PIN. Memory only — the PIN is asked again every
+// time ⚙ is opened (same as before), so the public TV screen never stays unlocked.
+let adminToken = null;
+
+async function api(path, {method="GET", body, admin=false} = {}){
+  const headers = {};
+  if(body !== undefined) headers["Content-Type"] = "application/json";
+  if(admin && adminToken) headers["Authorization"] = "Bearer " + adminToken;
+  const res = await fetch(API_BASE + path, {
+    method, headers, cache: "no-store",
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if(!res.ok) throw new Error("JSONBin fetch failed: " + res.status);
-  const data = await res.json();
-  const record = data.record;
-  // Backward-compatible: older data was saved as a plain array of teams.
-  // Newer data is {teams:[...], staff:[...], kpiTotals:{...}}.
-  if(Array.isArray(record)){
-    return { teams: record.map(migrateTeam), staff: [], kpiTotals: {}, kpiNeedsBackfill: true };
+  if(res.status === 401 && admin) adminToken = null;
+  if(!res.ok){
+    const err = new Error(`API ${method} ${path} failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
-  return {
-    teams: (record.teams||[]).map(migrateTeam),
-    staff: record.staff||[],
-    kpiTotals: record.kpiTotals || {},
-    // kpiTotals never existed before this feature — the very first load after
-    // upgrading needs a one-time backfill from whatever history still exists.
-    kpiNeedsBackfill: record.kpiTotals === undefined,
-  };
+  return res.status === 204 ? null : res.json();
 }
 
-// One-time migration: recompute totals the OLD way (aggregating whatever is
-// still sitting in team.history) so KPI collected before this fix isn't lost.
-// Only runs once — after the first save, kpiTotals exists and this is skipped.
-function backfillKpiFromHistory(teamsArr){
-  const map = {};
-  const bump = (name) => { if(!map[name]) map[name] = {jobs:0, ms:0}; return map[name]; };
-  teamsArr.forEach(t=>{
-    const hist = t.history || [];
-    for(let i=0;i<hist.length;i++){
-      const h = hist[i];
-      const next = hist[i+1];
-      const leader = h.leader !== undefined ? h.leader : t.leader;
-      const assistant = h.assistant !== undefined ? h.assistant : t.assistant;
-      const names = [leader, assistant].filter(Boolean);
-      if(next){
-        const durMs = next.at - h.at;
-        names.forEach(n => { bump(n).ms += durMs; });
-      }
-      if(h.stage === "returned"){
-        names.forEach(n => { bump(n).jobs += 1; });
-      }
-    }
-  });
-  return map;
+function handleAdminError(e){
+  console.error(e);
+  alert(tr(e.status === 401 ? "sessionExpired" : "serverError"));
+  if(e.status === 401) overlay.classList.remove("open");
+}
+
+// Public board data (no PINs). Each team comes with its last 20 checkpoints as history.
+async function fetchDataOnce(){
+  const data = await api("/board");
+  return (data.teams||[]).map(migrateTeam);
+}
+
+// Staff directory + KPI are admin-only — fetched after the admin PIN is accepted.
+// KPI is now counted by the server on every check-in (see CheckinsController).
+async function loadAdminData(){
+  try{
+    const [s, k] = await Promise.all([api("/staff", {admin:true}), api("/kpi", {admin:true})]);
+    staff = s; kpiTotals = k;
+  }catch(e){ console.warn("loadAdminData failed", e); }
 }
 
 let everLoadedOk = false;
 async function loadTeams(){
-  if(!jsonbinConfigured()){
-    console.warn("JSONBin belum disetkan — data team TIDAK akan disimpan/sync. Sila isi JSONBIN_BIN_ID & JSONBIN_API_KEY dalam kod.");
-    if(!everLoadedOk){ teams = DEFAULT_TEAMS.map(migrateTeam); staff = []; }
-    lastLoadedAt = Date.now();
-    render();
-    return;
-  }
   try{
-    const d = await fetchDataOnce();
-    teams = d.teams; staff = d.staff; kpiTotals = d.kpiTotals;
-    if(d.kpiNeedsBackfill){ kpiTotals = backfillKpiFromHistory(teams); saveAll(); }
+    teams = await fetchDataOnce();
     everLoadedOk = true;
   }catch(e1){
     // Retry once after a short pause — covers most transient network hiccups
     // before we consider the read a real failure.
     try{
       await new Promise(r=>setTimeout(r, 1200));
-      const d = await fetchDataOnce();
-      teams = d.teams; staff = d.staff; kpiTotals = d.kpiTotals;
-      if(d.kpiNeedsBackfill){ kpiTotals = backfillKpiFromHistory(teams); saveAll(); }
+      teams = await fetchDataOnce();
       everLoadedOk = true;
     }catch(e2){
-      console.warn("loadTeams: could not reach JSONBin — showing local fallback only, NOT touching saved data", e2);
-      // A read failure must NEVER be able to reset or overwrite the real
-      // shared data. Only fall back to defaults if we have NEVER successfully
-      // loaded before — a legitimately empty team list (admin deleted all of
-      // them on purpose) must NOT be treated the same as "never loaded" just
-      // because its length is also 0.
-      if(!everLoadedOk){
-        teams = DEFAULT_TEAMS.map(migrateTeam); staff = []; // local-only placeholder, never written back
-      }
-      lastLoadedAt = Date.now();
-      render();
-      return;
+      // Keep showing the last good data; nothing is ever written back on a read failure.
+      console.warn("loadTeams: could not reach the backend — keeping last loaded data", e2);
+      if(!everLoadedOk) teams = [];
     }
   }
   lastLoadedAt = Date.now();
   render();
 }
 
-async function saveAll(){
-  if(jsonbinConfigured()){
-    try{
-      await fetch(JSONBIN_URL, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
-        body: JSON.stringify({ teams, staff, kpiTotals }),
-      });
-      everLoadedOk = true; // a successful save is just as good as a successful load
-    }catch(e){ console.error("saveAll failed", e); }
-  } else {
-    console.warn("JSONBin belum disetkan — perubahan ini TIDAK disimpan kekal.");
-  }
+// Admin editor save. Returns true when saved.
+async function saveTeams(newTeams){
+  try{
+    const saved = await api("/teams", {method:"PUT", body:newTeams, admin:true});
+    teams = saved.map(migrateTeam);
+  }catch(e){ handleAdminError(e); return false; }
   lastLoadedAt = Date.now();
   render();
+  return true;
 }
-async function saveTeams(newTeams){ teams = newTeams; await saveAll(); }
-async function saveStaffList(newStaff){ staff = newStaff; await saveAll(); }
+async function saveStaffList(newStaff){
+  try{
+    staff = await api("/staff", {method:"PUT", body:newStaff, admin:true});
+  }catch(e){ handleAdminError(e); return; }
+  render();
+}
 
 function tickClock(){
   const now = new Date();
@@ -1017,19 +974,28 @@ const pinError = document.getElementById("pinGateError");
 let pinResolver = null;
 let pinCancelResolver = null;
 
-function askPin(expectedPin, titleKey){
+// checkPin(submitted) asks the backend: resolves true (correct) / false (wrong),
+// throws when the server can't be reached. PINs are never stored in this page.
+function askPin(checkPin, titleKey){
   return new Promise((resolve)=>{
     document.getElementById("pinGateTitle").textContent = tr(titleKey);
     pinInput.value = "";
     pinError.style.display = "none";
     pinOverlay.classList.add("open");
     setTimeout(()=>pinInput.focus(), 50);
-    pinResolver = (submitted) => {
-      if(String(submitted) === String(expectedPin) && expectedPin){
+    let checking = false;
+    pinResolver = async (submitted) => {
+      if(checking) return;
+      checking = true;
+      let ok = false, errKey = "pinWrong";
+      try{ ok = await checkPin(String(submitted)); }
+      catch(e){ console.error(e); errKey = "serverError"; }
+      checking = false;
+      if(ok){
         pinOverlay.classList.remove("open");
         resolve(true);
       } else {
-        pinError.textContent = tr("pinWrong");
+        pinError.textContent = tr(errKey);
         pinError.style.display = "block";
         pinInput.value = "";
         pinInput.focus();
@@ -1047,9 +1013,22 @@ pinInput.addEventListener("keydown", (e) => { if(e.key === "Enter" && pinResolve
 
 // ===== Admin edit modal =====
 const overlay = document.getElementById("overlay");
+async function checkAdminPin(pin){
+  try{
+    const r = await api("/auth/ops-admin", {method:"POST", body:{pin}});
+    adminToken = r.token;
+    return true;
+  }catch(e){
+    if(e.status === 401) return false;
+    throw e;
+  }
+}
 document.getElementById("gearBtn").onclick = async () => {
-  const ok = await askPin(ADMIN_PIN, "pinAdminTitle");
-  if(ok){ openEditor(); showAdminTab("edit"); overlay.classList.add("open"); }
+  adminToken = null;
+  const ok = await askPin(checkAdminPin, "pinAdminTitle");
+  if(!ok) return;
+  await loadAdminData();
+  if(await openEditor()){ showAdminTab("edit"); overlay.classList.add("open"); }
 };
 document.getElementById("closeBtn").onclick = () => overlay.classList.remove("open");
 document.getElementById("closeRegistryBtn").onclick = () => overlay.classList.remove("open");
@@ -1231,10 +1210,20 @@ function buildDatalists(){
     [...modelSet].sort().map(m=>`<option value="${m}">`).join("");
 }
 
-function openEditor(){
-  draft = JSON.parse(JSON.stringify(teams));
+// Stage + location of each team as loaded into the editor — used on Save to tell
+// what the admin actually changed (see saveBtn below).
+let draftOriginal = {};
+// Loads teams WITH their PINs (admin only). Returns true when the editor is ready.
+async function openEditor(){
+  try{
+    const list = await api("/teams", {admin:true});
+    draft = list.map(migrateTeam);
+  }catch(e){ handleAdminError(e); return false; }
+  draftOriginal = {};
+  draft.forEach(t => { draftOriginal[t.id] = {stage:t.stage, lat:t.lat, lng:t.lng}; });
   buildDatalists();
   renderEditor();
+  return true;
 }
 function renderEditor(){
   document.getElementById("editList").innerHTML = draft.map((t,i)=>`
@@ -1301,19 +1290,32 @@ document.getElementById("addTeamBtn").onclick = () => {
   renderEditor();
 };
 document.getElementById("saveBtn").onclick = async () => {
-  await saveTeams(draft);
-  overlay.classList.remove("open");
+  // Only send stage / location when the admin changed them in this editor, so a
+  // check-in a team made while the editor was open isn't overwritten with the
+  // older values loaded when it opened. null = "keep what the server has".
+  const payload = draft.map(t => {
+    const p = {...t};
+    delete p.history;
+    const o = draftOriginal[t.id];
+    if(o){
+      if(p.stage === o.stage) p.stage = null;
+      if(p.lat === o.lat && p.lng === o.lng){ p.lat = null; p.lng = null; }
+    }
+    return p;
+  });
+  if(await saveTeams(payload)) overlay.classList.remove("open");
 };
 
 // ===== Staff check-in modal =====
 const checkinOverlay = document.getElementById("checkinOverlay");
 let ciSelectedId = null;
 let ciUnlockedId = null;
+let ciPin = null; // the PIN the team just entered — sent with each check-in, never stored
 
 document.getElementById("checkinBtn").onclick = () => {
   populateCiTeamSelect();
 };
-document.getElementById("ciCloseBtn").onclick = () => { checkinOverlay.classList.remove("open"); ciUnlockedId = null; };
+document.getElementById("ciCloseBtn").onclick = () => { checkinOverlay.classList.remove("open"); ciUnlockedId = null; ciPin = null; };
 
 function populateCiTeamSelect(){
   const sel = document.getElementById("ciTeamSelect");
@@ -1321,7 +1323,7 @@ function populateCiTeamSelect(){
   sel.innerHTML = teams.map(t=>`<option value="${t.id}">${t.name}</option>`).join("");
   ciSelectedId = teams.some(t=>t.id===prevVal) ? prevVal : (teams[0] && teams[0].id);
   sel.value = ciSelectedId;
-  sel.onchange = () => { ciSelectedId = sel.value; ciUnlockedId = null; document.getElementById("ciStageList").innerHTML = ""; document.getElementById("ciCurrent").innerHTML = ""; };
+  sel.onchange = () => { ciSelectedId = sel.value; ciUnlockedId = null; ciPin = null; document.getElementById("ciStageList").innerHTML = ""; document.getElementById("ciCurrent").innerHTML = ""; };
   checkinOverlay.classList.add("open");
   ciUnlockedId = null;
   document.getElementById("ciStageList").innerHTML = "";
@@ -1332,11 +1334,21 @@ document.getElementById("ciContinueBtn").onclick = () => unlockTeamForCheckin();
 
 async function unlockTeamForCheckin(){
   ciUnlockedId = null;
+  ciPin = null;
   document.getElementById("ciStageList").innerHTML = "";
   document.getElementById("ciCurrent").innerHTML = "";
   const team = teams.find(t=>t.id===ciSelectedId);
   if(!team) return;
-  const ok = await askPin(team.pin, "pinStaffTitle");
+  const ok = await askPin(async (pin) => {
+    try{
+      await api(`/teams/${encodeURIComponent(team.id)}/pin-check`, {method:"POST", body:{pin}});
+      ciPin = pin;
+      return true;
+    }catch(e){
+      if(e.status === 401) return false;
+      throw e;
+    }
+  }, "pinStaffTitle");
   if(ok){
     ciUnlockedId = team.id;
     renderCheckinStages();
@@ -1370,23 +1382,9 @@ async function checkInStage(teamId, stage){
   const updated = JSON.parse(JSON.stringify(teams));
   const now = Date.now();
   if(!updated[idx].history) updated[idx].history = [];
-  const prevEntry = updated[idx].history.length ? updated[idx].history[updated[idx].history.length-1] : null;
 
-  // Bump the PERMANENT KPI ledger for the segment that just closed (previous
-  // checkpoint -> now). This happens before team.history is touched below, so
-  // it survives even if admin later deletes/edits this team's job or the
-  // 20-entry history cap rolls this checkpoint off.
-  if(prevEntry){
-    const leader = prevEntry.leader !== undefined ? prevEntry.leader : updated[idx].leader;
-    const assistant = prevEntry.assistant !== undefined ? prevEntry.assistant : updated[idx].assistant;
-    const names = [leader, assistant].filter(Boolean);
-    const durMs = now - prevEntry.at;
-    names.forEach(n=>{
-      if(!kpiTotals[n]) kpiTotals[n] = {jobs:0, ms:0};
-      kpiTotals[n].ms += durMs;
-      if(stage === "returned") kpiTotals[n].jobs += 1;
-    });
-  }
+  // The PERMANENT KPI ledger (time on the segment that just closed, +1 job on
+  // "returned") is now bumped by the backend when it records this check-in.
 
   updated[idx].stage = stage;
   updated[idx].history.push({ stage, at: now, leader: updated[idx].leader||"", assistant: updated[idx].assistant||"", site: updated[idx].site||"", job: updated[idx].job||"" });
@@ -1398,16 +1396,30 @@ async function checkInStage(teamId, stage){
   renderCheckinStages();
   render();
 
-  // Best-effort silent GPS update, then persist to JSONBin
-  if(navigator.geolocation){
-    navigator.geolocation.getCurrentPosition(pos=>{
-      updated[idx].lat = pos.coords.latitude;
-      updated[idx].lng = pos.coords.longitude;
-      saveTeams(updated);
-    }, ()=>{ saveTeams(updated); }, {enableHighAccuracy:true, timeout:5000});
-  } else {
-    await saveTeams(updated);
+  // Best-effort silent GPS, then send just this one check-in to the backend
+  // (it no longer rewrites every team, so two teams tapping at once can't clash).
+  const pos = await getGpsOnce();
+  try{
+    await api(`/teams/${encodeURIComponent(teamId)}/checkins`, {
+      method: "POST",
+      body: { pin: ciPin, stage, lat: pos ? pos.lat : null, lng: pos ? pos.lng : null },
+    });
+  }catch(e){
+    console.error("check-in failed", e);
+    alert(tr(e.status === 401 ? "pinWrong" : "serverError"));
   }
+  await loadTeams();
+  if(ciUnlockedId === teamId) renderCheckinStages();
+}
+
+function getGpsOnce(){
+  return new Promise(resolve => {
+    if(!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({lat: p.coords.latitude, lng: p.coords.longitude}),
+      () => resolve(null),
+      {enableHighAccuracy:true, timeout:5000});
+  });
 }
 
 applyStaticText();

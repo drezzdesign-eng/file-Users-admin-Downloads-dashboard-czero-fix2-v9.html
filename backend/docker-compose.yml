@@ -1,0 +1,32 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: czero-dashboard-postgres
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    image: czero-dashboard-api:latest
+    container_name: czero-dashboard-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ConnectionStrings__Db: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    ports:
+      # Only nginx on the host talks to the API (fleet-managing.czeros.tech/api/ -> here).
+      - "127.0.0.1:8097:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

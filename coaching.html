@@ -1053,28 +1053,46 @@ function addTaskRow(task){
 document.getElementById('addTaskBtn-1').addEventListener('click', () => { addTaskRow(); });
 for(let i=0;i<3;i++) addTaskRow();
 
-// ---------- Import completed jobs from Ops Monitor (field/outdoor teams only) ----------
-// Same JSONBin storage as the Ops Monitor dashboard — read-only here, just to pull
-// completed-job history for whichever staff name is typed above.
-const OPS_JSONBIN_BIN_ID = "6a981a33f5f4af5e2960db0d";
-const OPS_JSONBIN_API_KEY = "$2a$10$NC4XmJZMzrWb00rfkk9Ec.6oiinQqsu2bmwOD04J8AjtpKL3LzTwq";
+// ---------- Backend API ----------
+// Records, logins and the Ops Monitor import all go through the C ZERO backend.
+// "/api" works on the live site. For local testing use the full URL,
+// e.g. "https://fleet-managing.czeros.tech/api".
+const API_BASE = "/api";
+const TOKEN_KEY = 'czero_coaching_token';
 
+function coachToken(){
+  try{ return sessionStorage.getItem(TOKEN_KEY) || ''; }catch(e){ return ''; }
+}
+
+async function api(path, opts){
+  const { method = 'GET', body } = opts || {};
+  const headers = { 'Authorization': 'Bearer ' + coachToken() };
+  if(body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(API_BASE + path, {
+    method, headers, cache: 'no-store',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if(res.status === 401){
+    // Login expired — back to the login screen.
+    try{ sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem('czero_coaching_session_role'); }catch(e){}
+    alert('Session expired — please log in again. / Sesi tamat — sila log masuk semula.');
+    location.reload();
+  }
+  if(!res.ok){
+    const err = new Error(`API ${method} ${path} failed: ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+// ---------- Import completed jobs from Ops Monitor (field/outdoor teams only) ----------
+// Reads the Ops Monitor's full check-in log on the backend (not capped at 20 like
+// the old JSONBin history), for whichever staff name is typed above.
 function fmtDMY(ts){
   const d = new Date(ts);
   const p = n => String(n).padStart(2,'0');
   return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()}`;
-}
-
-async function fetchOpsTeams(){
-  const url = `https://api.jsonbin.io/v3/b/${OPS_JSONBIN_BIN_ID}/latest?t=${Date.now()}`;
-  const res = await fetch(url, {
-    headers: { "X-Master-Key": OPS_JSONBIN_API_KEY, "Cache-Control": "no-cache" },
-    cache: "no-store",
-  });
-  if(!res.ok) throw new Error("Ops Monitor fetch failed: " + res.status);
-  const data = await res.json();
-  const record = data.record;
-  return Array.isArray(record) ? record : (record.teams || []);
 }
 
 document.getElementById('importOpsBtn').addEventListener('click', async () => {
@@ -1091,26 +1109,13 @@ document.getElementById('importOpsBtn').addEventListener('click', async () => {
   btn.textContent = 'Mencari...';
   btn.disabled = true;
   try{
-    const teams = await fetchOpsTeams();
-    const nameLc = name.toLowerCase();
-    const jobs = [];
-    teams.forEach(t => {
-      (t.history||[]).forEach(h => {
-        if(h.stage !== 'complete') return;
-        // Older checkpoints (before the leader/assistant snapshot feature was
-        // added to Ops Monitor) won't have h.leader/h.assistant — fall back to
-        // the team's current leader/assistant for those older entries.
-        const leaderLc = (h.leader !== undefined ? h.leader : t.leader || '').toLowerCase();
-        const assistantLc = (h.assistant !== undefined ? h.assistant : t.assistant || '').toLowerCase();
-        if(leaderLc === nameLc || assistantLc === nameLc){
-          jobs.push({
-            name: [h.site||t.site, h.job||t.job].filter(Boolean).join(' — '),
-            due: '',
-            completed: fmtDMY(h.at),
-          });
-        }
-      });
-    });
+    // Every "complete" checkpoint where this name was leader or assistant.
+    const found = await api('/coaching/ops-jobs?name=' + encodeURIComponent(name));
+    const jobs = found.map(j => ({
+      name: [j.site, j.job].filter(Boolean).join(' — '),
+      due: '',
+      completed: fmtDMY(j.at),
+    }));
     if(jobs.length === 0){
       note.style.display = 'block';
       note.style.color = 'var(--poor)';
@@ -1823,9 +1828,43 @@ function buildTrend(name){
   }
 }
 
-// load existing records on page open
-staffRecords = safeLocalStorageGet();
+// Records are loaded from the backend after login (see showApp → loadRecordsFromServer).
 refreshSelector();
+
+async function loadRecordsFromServer(){
+  try{
+    staffRecords = await api('/coaching/records');
+  }catch(e){
+    console.error(e);
+    setStatus('Could not load records from server — refresh to retry. / Gagal muat rekod dari server.');
+    return;
+  }
+  await uploadLegacyLocalRecords();
+  refreshSelector();
+  buildAllStaffChart();
+}
+
+// One-time: records that were saved only in this browser (before the backend
+// existed) are uploaded. Only names the server doesn't have yet, so newer data
+// on the server is never overwritten. The local copy is left as a backup.
+const LEGACY_UPLOADED_KEY = 'czero_coaching_records_v2_uploaded';
+async function uploadLegacyLocalRecords(){
+  if(currentRole !== 'admin') return;
+  try{ if(localStorage.getItem(LEGACY_UPLOADED_KEY)) return; }catch(e){ return; }
+  const local = safeLocalStorageGet();
+  const names = Object.keys(local);
+  if(names.length){
+    names.forEach(k => { local[k] = normalizeRecord(local[k]); });
+    try{
+      staffRecords = await api('/coaching/records/import', { method:'POST', body:{ records: local, onlyMissing: true } });
+      setStatus(`Uploaded ${names.length} record(s) from this browser to the server ✓`);
+    }catch(e){
+      console.error('legacy upload failed', e);
+      return; // try again next login
+    }
+  }
+  try{ localStorage.setItem(LEGACY_UPLOADED_KEY, new Date().toISOString()); }catch(e){}
+}
 
 let hasUnsavedChanges = false;
 function updateExportReminder(){
@@ -1847,7 +1886,7 @@ document.getElementById('staffSelector').addEventListener('change', (e) => {
   loadStaff(name);
 });
 
-document.getElementById('saveBtn').addEventListener('click', () => {
+document.getElementById('saveBtn').addEventListener('click', async () => {
   const snap = getCurrentSnapshot();
   if(!snap.name){
     alert('Sila isi Nama Staf dahulu / Please enter Staff Name first (Tab 1).');
@@ -1856,21 +1895,27 @@ document.getElementById('saveBtn').addEventListener('click', () => {
   const total = snap.scores.reduce((a,b)=>a+(b||0),0);
   const pct = total/165*100;
 
-  staffRecords[snap.name] = staffRecords[snap.name] || { info:{}, comments:{}, actionRows:[], years:{} };
-  staffRecords[snap.name].info = { staffId:snap.staffId, role:snap.role, dateJoined:snap.dateJoined, dept:snap.dept, division:snap.division };
-  staffRecords[snap.name].comments = { staffComment:snap.staffComment, coachComment:snap.coachComment };
-  staffRecords[snap.name].actionRows = snap.actionRows;
-  staffRecords[snap.name].years = staffRecords[snap.name].years || {};
-  staffRecords[snap.name].years[snap.year] = { scores: snap.scores, total, pct, lateCount: snap.lateCount, absentCount: snap.absentCount, taskList: snap.taskList, savedAt: new Date().toISOString() };
+  // Server keeps the other years of this staff untouched and returns the full record.
+  try{
+    staffRecords[snap.name] = await api('/coaching/records', { method:'PUT', body:{
+      name: snap.name,
+      info: { staffId:snap.staffId, role:snap.role, dateJoined:snap.dateJoined, dept:snap.dept, division:snap.division },
+      comments: { staffComment:snap.staffComment, coachComment:snap.coachComment },
+      actionRows: snap.actionRows,
+      year: String(snap.year),
+      yearData: { scores: snap.scores, total, pct, lateCount: snap.lateCount, absentCount: snap.absentCount, taskList: snap.taskList, savedAt: new Date().toISOString() },
+    }});
+  }catch(e){
+    console.error(e);
+    setStatus('Save FAILED — could not reach server, try again. / Simpan GAGAL — cuba lagi.');
+    return;
+  }
 
-  const ok = safeLocalStorageSet(staffRecords);
   refreshSelector(snap.name);
   buildTrend(snap.name);
   buildCompareChart(snap.name);
   buildAllStaffChart();
-  hasUnsavedChanges = true;
-  updateExportReminder();
-  setStatus(ok ? `Saved: ${snap.name} (${snap.year}) ✓ — remember to Export!` : `Saved in this session only — use Export to keep it.`);
+  setStatus(`Saved: ${snap.name} (${snap.year}) ✓`);
 });
 
 document.getElementById('newBtn').addEventListener('click', () => {
@@ -1879,13 +1924,21 @@ document.getElementById('newBtn').addEventListener('click', () => {
   setStatus('New form / Borang baharu');
 });
 
-document.getElementById('deleteBtn').addEventListener('click', () => {
+document.getElementById('deleteBtn').addEventListener('click', async () => {
   const sel = document.getElementById('staffSelector');
   const name = sel.value;
   if(!name){ alert('Pilih staf dahulu untuk padam / Select a staff to delete first.'); return; }
   if(!confirm(`Delete ALL records for "${name}"? / Padam SEMUA rekod "${name}"?`)) return;
+  try{
+    await api('/coaching/records?name=' + encodeURIComponent(name), { method:'DELETE' });
+  }catch(e){
+    if(e.status !== 404){
+      console.error(e);
+      setStatus('Delete FAILED — could not reach server. / Padam GAGAL.');
+      return;
+    }
+  }
   delete staffRecords[name];
-  safeLocalStorageSet(staffRecords);
   refreshSelector();
   clearForm();
   buildAllStaffChart();
@@ -1916,30 +1969,39 @@ document.getElementById('importFile').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = (ev) => {
+  reader.onload = async (ev) => {
+    let imported;
     try{
-      const imported = JSON.parse(ev.target.result);
+      imported = JSON.parse(ev.target.result);
       Object.keys(imported).forEach(k => { imported[k] = normalizeRecord(imported[k]); });
-      staffRecords = {...staffRecords, ...imported};
-      safeLocalStorageSet(staffRecords);
-      refreshSelector();
-      buildAllStaffChart();
-      setStatus(`Imported ${Object.keys(imported).length} record(s) ✓`);
     }catch(err){
       alert('Invalid JSON file / Fail JSON tidak sah.');
+      return;
     }
+    // Same as before: records in the file replace same-name records.
+    try{
+      staffRecords = await api('/coaching/records/import', { method:'POST', body:{ records: imported, onlyMissing: false } });
+    }catch(err){
+      console.error(err);
+      setStatus('Import FAILED — could not reach server. / Import GAGAL.');
+      return;
+    }
+    refreshSelector();
+    buildAllStaffChart();
+    setStatus(`Imported ${Object.keys(imported).length} record(s) ✓`);
   };
   reader.readAsText(file);
   e.target.value = '';
 });
 
 // ================= LOGIN / ACCESS CONTROL =================
-// NOTE: this is a basic front-end gate only (not real security) — anyone who
-// views this file's source code can see the passwords below. For genuinely
-// confidential data, restrict file sharing/access at the storage level too.
+// Passwords are checked by the backend (Auth__CoachingAdminPassword /
+// Auth__CoachingHrPassword in the server's .env) — they are no longer in this file.
+// The backend also enforces the HR rules: HR only receives its own department's
+// records and cannot save, delete or import.
 const ACCOUNTS = {
-  admin: { password: 'CZero@Admin2026', label: 'Admin (Full Access)', restrictDepartment: null },
-  hr:    { password: 'CZero@HR2026',    label: 'HR Sub-Account (View & Print only)', restrictDepartment: 'Operation & Technical' },
+  admin: { label: 'Admin (Full Access)', restrictDepartment: null },
+  hr:    { label: 'HR Sub-Account (View & Print only)', restrictDepartment: 'Operation & Technical' },
 };
 const SESSION_KEY = 'czero_coaching_session_role';
 
@@ -2002,6 +2064,7 @@ function showApp(role){
   } else {
     note.style.display = 'none';
   }
+  loadRecordsFromServer();
 }
 
 document.getElementById('loginBtn').addEventListener('click', attemptLogin);
@@ -2009,28 +2072,42 @@ document.getElementById('loginPassword').addEventListener('keydown', (e) => {
   if(e.key === 'Enter') attemptLogin();
 });
 
-function attemptLogin(){
+async function attemptLogin(){
   const role = document.getElementById('loginRole').value;
   const pw = document.getElementById('loginPassword').value;
   const errEl = document.getElementById('loginError');
-  if(ACCOUNTS[role] && pw === ACCOUNTS[role].password){
-    sessionStorage.setItem(SESSION_KEY, role);
-    errEl.textContent = '';
-    showApp(role);
-  } else {
-    errEl.textContent = 'Wrong password / Kata laluan salah.';
+  if(!ACCOUNTS[role]){ errEl.textContent = 'Wrong password / Kata laluan salah.'; return; }
+  let res;
+  try{
+    res = await fetch(API_BASE + '/auth/coaching', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, password: pw }),
+    });
+  }catch(e){
+    errEl.textContent = 'Cannot reach server — try again. / Tidak dapat hubungi server — cuba lagi.';
+    return;
   }
+  if(res.status === 401){ errEl.textContent = 'Wrong password / Kata laluan salah.'; return; }
+  if(res.status === 429){ errEl.textContent = 'Too many attempts — wait a minute. / Terlalu banyak cubaan — tunggu seminit.'; return; }
+  if(!res.ok){ errEl.textContent = 'Server error — try again. / Ralat server — cuba lagi.'; return; }
+  const data = await res.json();
+  sessionStorage.setItem(TOKEN_KEY, data.token);
+  sessionStorage.setItem(SESSION_KEY, role);
+  errEl.textContent = '';
+  showApp(role);
 }
 
 document.getElementById('logoutBtn').addEventListener('click', () => {
   sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
   location.reload();
 });
 
 // check existing session on load
 (function(){
   const existingRole = sessionStorage.getItem(SESSION_KEY);
-  if(existingRole && ACCOUNTS[existingRole]){
+  if(existingRole && ACCOUNTS[existingRole] && coachToken()){
     showApp(existingRole);
   }
 })();
